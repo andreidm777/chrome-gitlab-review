@@ -1,0 +1,315 @@
+/* ===== AI Review Button ===== */
+
+#ai-review-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-weight: 600;
+  font-size: 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: none;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+
+#ai-review-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+#ai-review-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+#ai-review-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* ===== AI Review Panel ===== */
+
+.ai-review-panel {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  margin-bottom: 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  display: none;
+  overflow: hidden;
+}
+
+.ai-review-panel.visible {
+  display: block;
+  animation: slideDown 0.3s ease;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ai-review-header {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 12px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.ai-review-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: white;
+}
+
+.ai-review-close {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  font-size: 24px;
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+
+.ai-review-close:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.ai-review-content {
+  padding: 20px;
+  min-height: 100px;
+  max-height: 600px;
+  overflow-y: auto;
+  color: #1f2937;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* ===== Review States ===== */
+
+.ai-review-placeholder {
+  text-align: center;
+  color: #6b7280;
+  padding: 40px 20px;
+}
+
+.ai-review-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 40px 20px;
+}
+
+.ai-review-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #e5e7eb;
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ai-review-status {
+  color: #6b7280;
+  font-size: 14px;
+  margin: 0;
+}
+
+.ai-review-error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 20px;
+  color: #dc2626;
+}
+
+.ai-review-error h4 {
+  margin: 0 0 8px 0;
+  color: #dc2626;
+}
+
+.ai-review-error p {
+  margin: 8px 0;
+}
+
+.ai-review-hint {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.ai-review-result {
+  color: #1f2937;
+}
+
+.ai-review-result h2,
+.ai-review-result h3,
+.ai-review-result h4 {
+  color: #1f2937;
+  margin: 16px 0 8px 0;
+}
+
+.ai-review-result h2:first-child,
+.ai-review-result h3:first-child,
+.ai-review-result h4:first-child {
+  margin-top: 0;
+}
+
+.ai-review-result ul,
+.ai-review-result ol {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+
+.ai-review-result li {
+  margin: 4px 0;
+}
+
+.ai-review-result pre {
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 12px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.4;
+  margin: 12px 0;
+}
+
+.ai-review-result code {
+  background: #f3f4f6;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  color: #667eea;
+}
+
+.ai-review-result pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+.ai-review-result strong {
+  color: #1f2937;
+}
+
+.ai-review-result blockquote {
+  border-left: 4px solid #667eea;
+  background: #f9fafb;
+  padding: 12px 16px;
+  margin: 12px 0;
+  border-radius: 0 6px 6px 0;
+}
+
+.ai-review-result table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+}
+
+.ai-review-result th,
+.ai-review-result td {
+  border: 1px solid #e5e7eb;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.ai-review-result th {
+  background: #f9fafb;
+  font-weight: 600;
+}
+
+/* ===== Responsive ===== */
+
+@media (max-width: 768px) {
+  .ai-review-panel {
+    margin: 12px;
+  }
+
+  .ai-review-content {
+    padding: 16px;
+  }
+
+  #ai-review-btn {
+    font-size: 12px;
+    padding: 6px 12px;
+  }
+}
+
+/* ===== Dark Mode Support ===== */
+
+@media (prefers-color-scheme: dark) {
+  .ai-review-panel {
+    background: #1f2937;
+    border-color: #374151;
+  }
+
+  .ai-review-content,
+  .ai-review-result {
+    color: #f9fafb;
+  }
+
+  .ai-review-result h2,
+  .ai-review-result h3,
+  .ai-review-result h4 {
+    color: #f9fafb;
+  }
+
+  .ai-review-result pre {
+    background: #111827;
+    border-color: #374151;
+  }
+
+  .ai-review-result code {
+    background: #111827;
+    color: #818cf8;
+  }
+
+  .ai-review-result blockquote {
+    background: #111827;
+    border-color: #667eea;
+  }
+
+  .ai-review-result th {
+    background: #111827;
+  }
+
+  .ai-review-result th,
+  .ai-review-result td {
+    border-color: #374151;
+  }
+
+  .ai-review-placeholder {
+    color: #9ca3af;
+  }
+
+  .ai-review-status {
+    color: #9ca3af;
+  }
+}
