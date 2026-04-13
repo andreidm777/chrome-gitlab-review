@@ -16,7 +16,7 @@ function extractGitLabInfo(tabUrl) {
   }
 
   return {
-    baseUrl: `${url.protocol}//${url.host}`,
+    baseUrl: url.protocol + '//' + url.host,
     projectPath: match[1].substring(1), // Remove leading /
     projectId: encodeURIComponent(match[1].substring(1)), // URL encoded for API
     mergeRequestIid: match[2]
@@ -30,92 +30,13 @@ function isGitLabMRPage(url) {
   return /\/-\/merge_requests\/\d+/.test(new URL(url).pathname);
 }
 
-/**
- * Get GitLab private token from page context
- * This requires the user to have a token available (set via content script)
- */
-async function getGitLabToken(tabId) {
-  try {
-    const response = await chrome.tabs.sendMessage(tabId, { action: 'get-gitlab-token' });
-    return response?.token || null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Fetch MR diff from GitLab API
- */
-async function fetchMRDiff(gitlabInfo, token) {
-  const { baseUrl, projectId, mergeRequestIid } = gitlabInfo;
-
-  const url = `${baseUrl}/api/v4/projects/${projectId}/merge_requests/${mergeRequestIid}/diffs`;
-
-  const headers = {
-    'Accept': 'application/json'
-  };
-
-  if (token) {
-    headers['PRIVATE-TOKEN'] = token;
-  }
-
-  const response = await fetch(url, { headers });
-
-  if (!response.ok) {
-    throw new Error(`GitLab API error: ${response.status} ${response.statusText}`);
-  }
-
-  const diffs = await response.json();
-
-  // Combine all diffs into a single text
-  const diffText = diffs.map(diff => {
-    const header = `--- ${diff.old_path}\n+++ ${diff.new_path}\n`;
-    return header + diff.diff;
-  }).join('\n\n');
-
-  return diffText;
-}
-
-/**
- * Get MR details (title, description)
- */
-async function getMRDetails(gitlabInfo, token) {
-  const { baseUrl, projectId, mergeRequestIid } = gitlabInfo;
-
-  const url = `${baseUrl}/api/v4/projects/${projectId}/merge_requests/${mergeRequestIid}`;
-
-  const headers = {
-    'Accept': 'application/json'
-  };
-
-  if (token) {
-    headers['PRIVATE-TOKEN'] = token;
-  }
-
-  const response = await fetch(url, { headers });
-
-  if (!response.ok) {
-    throw new Error(`GitLab API error: ${response.status} ${response.statusText}`);
-  }
-
-  return await response.json();
-}
-
 // ===== LLM Integration (OpenAI-compatible) =====
 
 /**
  * Test LLM connection with a simple request
  */
 async function testLLMConnection({ apiUrl, apiKey, model }) {
-  const url = `${apiUrl}/chat/completions`;
-
-  const headers = {
-    'Content-Type': 'application/json'
-  };
-
-  if (apiKey) {
-    headers['Authorization'] = `Bearer ${apiKey}`;
-  }
+  const url = apiUrl + '/chat/completions';
 
   const body = {
     model: model,
@@ -123,81 +44,125 @@ async function testLLMConnection({ apiUrl, apiKey, model }) {
     max_tokens: 10
   };
 
+  const headers = new Headers();
+  headers.append('Content-Type', 'application/json; charset=utf-8');
+  if (apiKey) {
+    // Clean apiKey to ensure it's ASCII-only
+    const cleanApiKey = String(apiKey).replace(/[^\x00-\x7F]/g, '');
+    headers.append('Authorization', 'Bearer ' + cleanApiKey);
+  }
+
   const response = await fetch(url, {
     method: 'POST',
-    headers,
+    headers: headers,
     body: JSON.stringify(body)
   });
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`LLM API error: ${response.status} - ${error}`);
+    throw new Error('LLM API error: ' + response.status + ' - ' + error);
   }
 
   return true;
 }
 
 /**
- * Send diff to LLM for code review
+ * Split text into chunks for processing
  */
-async function reviewWithLLM(diffText, settings, mrDetails = null) {
+function chunkText(text, maxLinesPerChunk) {
+  const lines = text.split('\n');
+  const chunks = [];
+  
+  for (let i = 0; i < lines.length; i += maxLinesPerChunk) {
+    chunks.push(lines.slice(i, i + maxLinesPerChunk).join('\n'));
+  }
+  
+  return chunks;
+}
+
+/**
+ * Send diff to LLM for code review - handles large diffs by chunking
+ */
+async function reviewWithLLM(diffText, settings, mrDetails) {
   const { apiUrl, apiKey, model, reviewPrompt, maxDiffSize } = settings;
 
-  // Truncate diff if too large
-  let truncatedDiff = diffText;
-  let wasTruncated = false;
-
-  if (diffText.length > maxDiffSize) {
-    truncatedDiff = diffText.substring(0, maxDiffSize);
-    wasTruncated = true;
-  }
-
+  // Split diff into chunks
+  const chunks = chunkText(diffText, maxDiffSize);
+  
   // Build context from MR details
   let contextInfo = '';
   if (mrDetails) {
-    contextInfo = `MR Title: ${mrDetails.title}\n`;
-    contextInfo += `Source: ${mrDetails.source_branch} → ${mrDetails.target_branch}\n`;
+    contextInfo = 'MR Title: ' + mrDetails.title + '\n';
+    const sourceBranch = String(mrDetails.source_branch).replace(/→/g, '->');
+    const targetBranch = String(mrDetails.target_branch).replace(/→/g, '->');
+    contextInfo += 'Source: ' + sourceBranch + ' -> ' + targetBranch + '\n';
     if (mrDetails.description) {
-      contextInfo += `Description: ${mrDetails.description.substring(0, 1000)}\n`;
+      contextInfo += 'Description: ' + String(mrDetails.description).substring(0, 1000) + '\n';
     }
     contextInfo += '\n';
   }
 
-  const prompt = `${reviewPrompt}\n\n${contextInfo}${truncatedDiff}`;
+  // Prepare messages array for streaming context
+  const messages = [
+    { role: 'system', content: 'Ты помошник в ревью коде, отвечай на русском языке.' }
+  ];
 
-  if (wasTruncated) {
-    prompt += '\n\n[Note: Diff was truncated due to size limits. Only first part is shown.]';
+  // Add MR context
+  if (contextInfo) {
+    messages.push({ role: 'user', content: 'Контекст Merge Request:\n' + contextInfo });
+    messages.push({ role: 'assistant', content: 'Принято. Жду дифф для анализа.' });
   }
 
-  const url = `${apiUrl}/chat/completions`;
-
-  const headers = {
-    'Content-Type': 'application/json'
-  };
-
-  if (apiKey) {
-    headers['Authorization'] = `Bearer ${apiKey}`;
+  // Send each chunk
+  for (let i = 0; i < chunks.length; i++) {
+    const isLastChunk = i === chunks.length - 1;
+    const chunkPrefix = chunks.length > 1 ? `Часть ${i + 1} из ${chunks.length}: ` : '';
+    
+    const continuation = isLastChunk ? '' : '\n\n(Продолжение следует...)';
+    messages.push({
+      role: 'user',
+      content: chunkPrefix + chunks[i] + continuation
+    });
+    
+    messages.push({
+      role: 'assistant',
+      content: isLastChunk ? '' : 'Получил, жду следующую часть.'
+    });
   }
+
+  // Final prompt asking for full review
+  const finalPrompt = chunks.length > 1 
+    ? `Это весь дифф. Теперь проведи полное код-ревью всего кода, который я прислал.`
+    : `Вот дифф для анализа:\n\n${diffText}`;
+
+  messages.push({ role: 'user', content: finalPrompt });
+
+  // Remove control characters (except common whitespace like \n, \r, \t)
+  for (const msg of messages) {
+    msg.content = msg.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+  }
+
+  const url = apiUrl + '/chat/completions';
 
   const body = {
     model: model,
-    messages: [
-      { role: 'system', content: 'You are a helpful code review assistant.' },
-      { role: 'user', content: prompt }
-    ],
-    temperature: 0.3,
-    max_tokens: 4096
+    messages: messages,
+    temperature: 0.7,
+    max_tokens: 8192
   };
+
+  const headers = new Headers();
+  headers.append('Content-Type', 'application/json; charset=utf-8');
 
   const response = await fetch(url, {
     method: 'POST',
-    headers,
+    headers: headers,
     body: JSON.stringify(body)
   });
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`LLM API error: ${response.status} - ${error}`);
+    throw new Error('LLM API error: ' + response.status + ' - ' + error);
   }
 
   const data = await response.json();
@@ -227,70 +192,70 @@ async function handleAsyncMessage(message, sender) {
     }
 
     case 'start-review': {
-      const { tabId, gitlabInfo } = message.payload;
-      const token = await getGitLabToken(tabId);
+      const { gitlabInfo } = message.payload;
+      const senderTabId = sender.tab?.id;
 
-      try {
-        // Send progress update
-        chrome.tabs.sendMessage(tabId, {
-          action: 'review-progress',
-          payload: { stage: 'fetching-diff', message: 'Fetching MR diff...' }
-        });
-
-        // Fetch diff and details
-        const [diffText, mrDetails] = await Promise.all([
-          fetchMRDiff(gitlabInfo, token),
-          getMRDetails(gitlabInfo, token)
-        ]);
-
-        if (!diffText) {
-          throw new Error('No diff found. The MR may not have any changes or you may need to provide a token.');
-        }
-
-        // Send progress update
-        chrome.tabs.sendMessage(tabId, {
-          action: 'review-progress',
-          payload: { stage: 'reviewing', message: `Analyzing ${diffText.split('\n').length} lines of diff...` }
-        });
-
-        // Get settings
-        const settings = await chrome.storage.local.get({
-          apiUrl: 'https://api.openai.com/v1',
-          apiKey: '',
-          model: 'gpt-4o',
-          reviewPrompt: '',
-          maxDiffSize: 5000
-        });
-
-        // Use default prompt if not set
-        const defaultPrompt = `You are an expert code reviewer. Review the following diff from a GitLab Merge Request.
-
-Your review should:
-1. **Identify bugs and potential issues** - Logic errors, edge cases, race conditions, memory leaks
-2. **Security concerns** - Vulnerabilities, injection risks, data exposure
-3. **Performance issues** - Inefficient algorithms, unnecessary complexity
-4. **Code quality** - Readability, maintainability, best practices
-5. **Suggestions** - Concrete improvement suggestions with code examples
-
-Format your response in markdown. Be concise but thorough. Focus on meaningful issues, not style preferences.
-
-Here's the diff:`;
-
-        settings.reviewPrompt = settings.reviewPrompt || defaultPrompt;
-
-        // Call LLM
-        const review = await reviewWithLLM(diffText, settings, mrDetails);
-
-        return {
-          success: true,
-          review
-        };
-      } catch (err) {
-        return {
-          success: false,
-          error: err.message
-        };
+      if (!senderTabId) {
+        return { success: false, error: 'Cannot determine tab ID' };
       }
+
+      // Send progress update
+      chrome.tabs.sendMessage(senderTabId, {
+        action: 'review-progress',
+        payload: { stage: 'fetching-diff', message: 'Fetching MR diff...' }
+      });
+
+      // Ask content script to fetch diff using its context (with cookies)
+      const fetchResult = await chrome.tabs.sendMessage(senderTabId, {
+        action: 'fetch-gitlab-data',
+        payload: gitlabInfo
+      });
+
+      if (!fetchResult.success) {
+        throw new Error(fetchResult.error || 'Failed to fetch MR data');
+      }
+
+      const { diffText, mrDetails } = fetchResult;
+
+      if (!diffText) {
+        throw new Error('No diff found. The MR may not have any changes.');
+      }
+
+      // Send progress update
+      chrome.tabs.sendMessage(senderTabId, {
+        action: 'review-progress',
+        payload: { stage: 'reviewing', message: 'Analyzing ' + diffText.split('\n').length + ' lines of diff...' }
+      });
+
+      // Get settings
+      const settings = await chrome.storage.local.get({
+        apiUrl: 'https://api.openai.com/v1',
+        apiKey: '',
+        model: 'gpt-4o',
+        reviewPrompt: '',
+        maxDiffSize: 10000
+      });
+
+      // Use default prompt if not set (Russian)
+      const defaultPrompt = 'Вы — опытный рецензент кода. Проведите код-ревью диффа из Merge Request в GitLab.\n\n' +
+        'Ваша задача:\n' +
+        '1. **Найти баги и потенциальные проблемы** — логические ошибки, краевые случаи, race conditions, утечки памяти\n' +
+        '2. **Обратить внимание на безопасность** — уязвимости, риски инъекций, утечки данных\n' +
+        '3. **Отметить проблемы производительности** — неэффективные алгоритмы, излишняя сложность\n' +
+        '4. **Оценить качество кода** — читаемость, поддерживаемость, best practices\n' +
+        '5. **Предложить улучшения** — конкретные рекомендации с примерами кода\n\n' +
+        'Форматируйте ответ в markdown. Будьте кратки, но подробны. Фокусируйтесь на существенных проблемах, а не на предпочтениях по стилю. пиши на русском языке\n\n' +
+        'Вот дифф:';
+
+      settings.reviewPrompt = settings.reviewPrompt || defaultPrompt;
+
+      // Call LLM
+      const review = await reviewWithLLM(diffText, settings, mrDetails);
+
+      return {
+        success: true,
+        review
+      };
     }
 
     case 'test-llm-connection': {
@@ -300,11 +265,6 @@ Here's the diff:`;
       } catch (err) {
         return { success: false, error: err.message };
       }
-    }
-
-    case 'get-gitlab-token': {
-      // This is handled by content script, not background
-      return { token: null };
     }
 
     default:

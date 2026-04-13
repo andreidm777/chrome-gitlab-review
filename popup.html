@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GitLab MR AI Reviewer - Settings</title>
+  <title>GitLab MR AI Reviewer — Настройки</title>
   <style>
     * {
       margin: 0;
@@ -153,48 +153,46 @@
 </head>
 <body>
   <h1>🔍 GitLab MR AI Reviewer</h1>
-  <p class="subtitle">Configure your LLM connection for code review</p>
+  <p class="subtitle">Настройте подключение к LLM для код-ревью</p>
 
   <form id="settings-form">
-    <div class="section-title">LLM Connection</div>
+    <div class="section-title">Подключение к LLM</div>
 
     <div class="form-group">
-      <label for="api-url">API Base URL</label>
+      <label for="api-url">Базовый URL API</label>
       <input type="url" id="api-url" placeholder="https://api.openai.com/v1" required>
-      <p class="hint">OpenAI-compatible endpoint (e.g., OpenAI, Ollama, vLLM, LM Studio)</p>
+      <p class="hint">OpenAI-совместимый endpoint (например, OpenAI, Ollama, vLLM, LM Studio)</p>
     </div>
 
     <div class="form-group">
-      <label for="api-key">API Key</label>
+      <label for="api-key">API Ключ</label>
       <input type="password" id="api-key" placeholder="sk-...">
-      <p class="hint">Leave empty if your endpoint doesn't require auth</p>
+      <p class="hint">Оставьте пустым, если endpoint не требует авторизации</p>
     </div>
 
     <div class="form-group">
-      <label for="model">Model</label>
+      <label for="model">Модель</label>
       <input type="text" id="model" placeholder="gpt-4o" required>
-      <p class="hint">Model name (e.g., gpt-4o, claude-3-5-sonnet, llama3.1:70b)</p>
+      <p class="hint">Название модели (например, gpt-4o, claude-3-5-sonnet, llama3.1:70b)</p>
     </div>
 
-    <div class="divider"></div>
-
-    <div class="section-title">Review Settings</div>
+    <div class="section-title">Настройки ревью</div>
 
     <div class="form-group">
-      <label for="review-prompt">Custom Review Instructions (optional)</label>
-      <textarea id="review-prompt" placeholder="Leave empty to use default prompt..."></textarea>
-      <p class="hint">Custom instructions for the AI reviewer</p>
+      <label for="review-prompt">Инструкции для AI (опционально)</label>
+      <textarea id="review-prompt" placeholder="Оставьте пустым для использования промта по умолчанию..."></textarea>
+      <p class="hint">Собственные инструкции для AI-рецензента</p>
     </div>
 
     <div class="form-group">
-      <label for="max-diff-size">Max Diff Size (lines)</label>
-      <input type="number" id="max-diff-size" value="5000" min="500" max="50000">
-      <p class="hint">Limit for diff size to avoid token limits</p>
+      <label for="max-diff-size">Макс. размер диффа (строк)</label>
+      <input type="number" id="max-diff-size" value="10000" min="500" max="50000">
+      <p class="hint">Лимит размера диффа для избежания лимитов токенов. Для моделей с 100K+ контекста можно поставить 10000+</p>
     </div>
 
     <div class="actions">
-      <button type="button" id="btn-test" class="btn btn-secondary">Test Connection</button>
-      <button type="submit" id="btn-save" class="btn btn-primary">Save Settings</button>
+      <button type="button" id="btn-test" class="btn btn-secondary">Проверить соединение</button>
+      <button type="submit" id="btn-save" class="btn btn-primary">Сохранить настройки</button>
     </div>
   </form>
 

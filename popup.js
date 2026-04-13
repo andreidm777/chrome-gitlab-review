@@ -6,18 +6,16 @@ const defaults = {
   maxDiffSize: 5000
 };
 
-const defaultPrompt = `You are an expert code reviewer. Review the following diff from a GitLab Merge Request.
+const defaultPrompt = `Вы — опытный рецензент кода. Проведите код-ревью диффа из Merge Request в GitLab.
 
-Your review should:
-1. **Identify bugs and potential issues** - Logic errors, edge cases, race conditions, memory leaks
-2. **Security concerns** - Vulnerabilities, injection risks, data exposure
-3. **Performance issues** - Inefficient algorithms, unnecessary complexity
-4. **Code quality** - Readability, maintainability, best practices
-5. **Suggestions** - Concrete improvement suggestions with code examples
+Ваша задача:
+1. **Найти баги и потенциальные проблемы** — логические ошибки, краевые случаи, race conditions, утечки памяти
+2. **Обратить внимание на безопасность** — уязвимости, риски инъекций, утечки данных
+3. **Отметить проблемы производительности** — неэффективные алгоритмы, излишняя сложность
+4. **Оценить качество кода** — читаемость, поддерживаемость, best practices
+5. **Предложить улучшения** — конкретные рекомендации с примерами кода
 
-Format your response in markdown. Be concise but thorough. Focus on meaningful issues, not style preferences.
-
-Here's the diff:`;
+Форматируйте ответ в markdown. Будьте кратки, но подробны. Фокусируйтесь на существенных проблемах, а не на предпочтениях по стилю.`;
 
 // Load saved settings on popup open
 document.addEventListener('DOMContentLoaded', async () => {
@@ -43,7 +41,7 @@ document.getElementById('settings-form').addEventListener('submit', async (e) =>
   };
 
   await chrome.storage.local.set(settings);
-  showStatus('Settings saved successfully!', 'success');
+  showStatus('Настройки сохранены!', 'success');
 });
 
 // Test connection
@@ -53,11 +51,11 @@ document.getElementById('btn-test').addEventListener('click', async () => {
   const model = document.getElementById('model').value;
 
   if (!apiUrl || !model) {
-    showStatus('Please fill in API URL and Model', 'error');
+    showStatus('Пожалуйста, заполните API URL и модель', 'error');
     return;
   }
 
-  showStatus('Testing connection...', 'success');
+  showStatus('Проверка соединения...', 'success');
 
   try {
     const response = await chrome.runtime.sendMessage({
@@ -66,12 +64,12 @@ document.getElementById('btn-test').addEventListener('click', async () => {
     });
 
     if (response.success) {
-      showStatus('Connection successful!', 'success');
+      showStatus('Соединение успешно!', 'success');
     } else {
-      showStatus(`Connection failed: ${response.error}`, 'error');
+      showStatus(`Ошибка: ${response.error}`, 'error');
     }
   } catch (err) {
-    showStatus(`Error: ${err.message}`, 'error');
+    showStatus(`Ошибка: ${err.message}`, 'error');
   }
 });
 
