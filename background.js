@@ -153,6 +153,11 @@ async function reviewWithLLM(diffText, settings, mrDetails) {
 
   const headers = new Headers();
   headers.append('Content-Type', 'application/json; charset=utf-8');
+  if (apiKey) {
+    // Clean apiKey to ensure it's ASCII-only
+    const cleanApiKey = String(apiKey).replace(/[^\x00-\x7F]/g, '');
+    headers.append('Authorization', 'Bearer ' + cleanApiKey);
+  }
 
   const response = await fetch(url, {
     method: 'POST',
