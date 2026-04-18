@@ -232,11 +232,11 @@ async function startReview() {
     });
 
     if (reviewResponse.success) {
-      // Render the review
-      const markdownHtml = renderMarkdown(reviewResponse.review);
+      // Render the review (JSON or fallback markdown)
+      const html = renderReviewJSON(reviewResponse.review);
       content.innerHTML = `
         <div class="ai-review-result">
-          ${markdownHtml}
+          ${html}
         </div>
       `;
     } else {
@@ -258,9 +258,187 @@ async function startReview() {
   }
 }
 
-// ===== Markdown Rendering (simple) =====
+// ===== Review Rendering (JSON-based with issue blocks) =====
 
-function renderMarkdown(text) {
+/**
+ * Severity configuration for UI display
+ */
+const SEVERITY_CONFIG = {
+  critical: { label: '🔴 Критическая', color: '#ef4444', bg: '#fef2f2' },
+  major: { label: '🟠 Серьёзная', color: '#f97316', bg: '#fff7ed' },
+  minor: { label: '🟡 Замечание', color: '#eab308', bg: '#fefce8' },
+  suggestion: { label: '🟢 Предложение', color: '#22c55e', bg: '#f0fdf4' }
+};
+
+/**
+ * Render review (JSON object or fallback to markdown)
+ */
+function renderReviewJSON(review) {
+  if (!review) return '';
+
+  // Check if it's a string (markdown fallback) — handle it
+  if (typeof review === 'string') {
+    try {
+      review = JSON.parse(review);
+    } catch (e) {
+      // It's markdown text — render as simple HTML
+      return `<div class="ai-review-fallback">${escapeHtml(review).replace(/\n/g, '<br>')}</div>`;
+    }
+  }
+
+  // Render JSON structure
+  let html = '';
+
+  // Summary
+  if (review.summary) {
+    const summaryId = 'summary-' + Date.now();
+    html += `
+      <div class="review-summary">
+        <h4>${escapeHtml(review.summary)}</h4>
+        <button class="review-summary-copy" onclick="copyText(${JSON.stringify(review.summary).replace(/"/g, '&quot;')})" title="Копировать резюме">
+          <span class="copy-icon">📋</span>
+          <span class="copy-text">Копировать</span>
+        </button>
+      </div>
+    `;
+  }
+
+  // Issues
+  if (review.issues && Array.isArray(review.issues)) {
+    for (const issue of review.issues) {
+      html += renderIssueCard(issue);
+    }
+  }
+
+  return html;
+}
+
+/**
+ * Render an individual issue card
+ */
+function renderIssueCard(issue) {
+  const severity = SEVERITY_CONFIG[issue.severity] || SEVERITY_CONFIG.suggestion;
+  const id = 'issue-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+
+  // Build line number reference link (clickable)
+  let lineRef = '';
+  if (issue.file && issue.line) {
+    const gitLabUrl = buildGitLabLineUrl(issue.file, issue.line);
+    lineRef = `
+      <a href="${escapeHtml(gitLabUrl)}" class="issue-line-ref" target="_blank" rel="noopener" title="Перейти к строке ${issue.line} в GitLab">
+        📂 ${escapeHtml(issue.file)}:${issue.line}
+      </a>
+    `;
+  }
+
+  // Build suggestion
+  let suggestionHtml = '';
+  if (issue.suggestion) {
+    suggestionHtml = `<div class="issue-suggestion"><strong>💡 Исправление:</strong> ${escapeHtml(issue.suggestion)}</div>`;
+  }
+
+  // Escape description for HTML (preserve newlines)
+  const descHtml = escapeHtml(issue.description || '').replace(/\n/g, '<br>');
+
+  return `
+    <div class="issue-block" data-severity="${issue.severity || 'suggestion'}" id="${id}">
+      <div class="issue-block-header" style="border-left: 4px solid ${severity.color}; background: ${severity.bg};">
+        <div class="issue-block-info">
+          <h4 class="issue-block-title">${escapeHtml(issue.title || 'Проблема')}</h4>
+          <div class="issue-block-meta">
+            <span class="issue-severity" style="color: ${severity.color};">${severity.label}</span>
+            ${lineRef}
+          </div>
+        </div>
+        <button class="issue-block-copy" onclick="copyIssueBlock('${id}')" title="Копировать">
+          <span class="copy-icon">📋</span>
+          <span class="copy-text">Копировать</span>
+        </button>
+      </div>
+      <div class="issue-block-content">
+        <div class="issue-description">${descHtml}</div>
+        ${suggestionHtml}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Build GitLab URL for a specific file and line number
+ */
+function buildGitLabLineUrl(filePath, lineNumber) {
+  if (!gitLabInfo || !gitLabInfo.projectId || !gitLabInfo.mergeRequestIid) {
+    return '#';
+  }
+
+  // Encode the file path for URL
+  const encodedPath = encodeURIComponent(filePath);
+
+  // GitLab MR diff line URL format
+  return `${gitLabInfo.baseUrl}/${gitLabInfo.projectId}/-/merge-requests/${gitLabInfo.mergeRequestIid}/diffs?diff_id=${Date.now()}&drop_tab_selection=true&line=${lineNumber}`;
+}
+
+/**
+ * Copy issue block content to clipboard
+ */
+async function copyIssueBlock(elementId) {
+  const element = document.getElementById(elementId);
+  if (!element) return;
+
+  // Get title + description + suggestion
+  const title = element.querySelector('.issue-block-title')?.textContent || '';
+  const desc = element.querySelector('.issue-description')?.textContent || '';
+  const suggestion = element.querySelector('.issue-suggestion')?.textContent || '';
+
+  const text = [title, desc, suggestion].filter(Boolean).join('\n\n');
+
+  try {
+    await navigator.clipboard.writeText(text);
+    const button = element.querySelector('.issue-block-copy');
+    if (button) {
+      const originalHTML = button.innerHTML;
+      button.innerHTML = '<span class="copy-icon">✓</span><span class="copy-text">Скопировано!</span>';
+      button.classList.add('copied');
+      setTimeout(() => {
+        button.innerHTML = originalHTML;
+        button.classList.remove('copied');
+      }, 2000);
+    }
+  } catch (err) {
+    // Fallback for older browsers
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+  }
+}
+
+/**
+ * Copy text to clipboard (utility)
+ */
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (err) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+  }
+}
+
+/**
+ * Render markdown content as HTML (simple)
+ */
+function renderMarkdownContent(text) {
   if (!text) return '';
 
   const lines = text.split('\n');
@@ -318,32 +496,17 @@ function renderMarkdown(text) {
       continue;
     }
 
-    // Headers
-    if (line.startsWith('# ')) {
-      closeList();
-      html += `<h2>${processInline(line.slice(2))}</h2>`;
-      continue;
-    }
-    if (line.startsWith('## ')) {
-      closeList();
-      html += `<h3>${processInline(line.slice(3))}</h3>`;
-      continue;
-    }
+    // Headers - skip ## but handle ### and below
     if (line.startsWith('### ')) {
       closeList();
-      html += `<h4>${processInline(line.slice(4))}</h4>`;
-      continue;
-    }
-    if (line.startsWith('#### ')) {
-      closeList();
-      html += `<h5>${processInline(line.slice(5))}</h5>`;
+      html += `<h5>${processInline(line.slice(4))}</h5>`;
       continue;
     }
 
     // Lists
-    if (line.match(/^\- /)) {
+    if (line.match(/^[\-\*]\s/)) {
       inList = true;
-      listItems.push(`<li>${processInline(line.slice(2))}</li>`);
+      listItems.push(`<li>${processInline(line.replace(/^[\-\*]\s/, ''))}</li>`);
       continue;
     }
 
@@ -354,7 +517,7 @@ function renderMarkdown(text) {
       continue;
     }
 
-    // Regular text - close list first
+    // Regular text
     closeList();
     html += processInline(line) + '<br>';
   }

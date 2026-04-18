@@ -1,99 +1,46 @@
 # 🔍 GitLab MR AI Reviewer
 
-Chrome extension для AI-powered ревью кода в GitLab Merge Requests с поддержкой любой LLM через OpenAI-совместимый протокол.
+Chrome extension for AI-powered code review on GitLab Merge Requests with support for any LLM via OpenAI-compatible API.
 
-## 🚀 Быстрый старт (тестирование)
+## Features
 
-### 1. Запусти тестовую среду
+- ✅ Automatic detection of Merge Request pages in GitLab
+- ✅ Integration with **any LLM** through OpenAI API protocol (OpenAI, Ollama, vLLM, LM Studio, and more)
+- ✅ Works with **any GitLab installation** (on-premises, gitlab.com)
+- ✅ Fetches diff and MR metadata via GitLab API
+- ✅ Customizable review prompts
+- ✅ Beautiful dark-themed UI with Markdown support
 
-```bash
-# Запуск GitLab + создание тестового MR с багами
-./start.sh
-```
+## Installation
 
-Скрипт автоматически:
-- Поднимет GitLab CE в Docker
-- Создаст тестовый проект с намеренными багами
-- Создаст MR с "исправлениями" (и новыми багами)
-- Выведет URL для тестирования
+### 1. Load the Extension in Chrome
 
-### 2. Установи расширение в Chrome
+1. Open Chrome and navigate to `chrome://extensions/`
+2. Enable **Developer mode** (toggle in the top-right corner)
+3. Click **Load unpacked**
+4. Select the extension folder
 
-1. Открой `chrome://extensions/`
-2. Включи **Developer mode** (справа сверху)
-3. Нажми **Load unpacked**
-4. Выбери папку `chrome-mr-plug`
+### 2. Configure LLM Connection
 
-### 3. Настрой LLM
+1. Click the extension icon in the toolbar
+2. Set the following in the popup:
+   - **API Base URL** — URL to your OpenAI-compatible API
+   - **API Key** — authorization key (if required)
+   - **Model** — model name
+3. Click **Test Connection** to verify
+4. Click **Save Settings**
 
-Кликни на иконку расширения и настрой подключение:
+### 3. GitLab Token (if required)
 
-**Пример с Ollama (локально, бесплатно):**
-```
-API Base URL: http://localhost:11434/v1
-API Key: (оставь пустым)
-Model: llama3.1:70b
-```
+For accessing private repositories, you may need a GitLab Personal Access Token:
 
-**Пример с OpenAI:**
-```
-API Base URL: https://api.openai.com/v1
-API Key: sk-...
-Model: gpt-4o
-```
+1. In GitLab, go to **User Settings** → **Access Tokens**
+2. Create a token with the `read_api` permission
+3. The token is automatically picked up from your GitLab session
 
-### 4. Протестируй
+> **Note:** If you're logged into GitLab, the extension will attempt to use your session. For private instances, an explicit token may be required.
 
-1. Открой MR в браузере (URL будет выведен после `./start.sh`)
-2. Найди кнопку **🤖 AI Review** в шапке MR
-3. Нажми и дождись ревью!
-
-### Остановка
-
-```bash
-./stop.sh
-```
-
-## Возможности
-
-- ✅ Автоматическое обнаружение страниц Merge Request в GitLab
-- ✅ Интеграция с **любой LLM** через OpenAI API протокол (OpenAI, Ollama, vLLM, LM Studio, и др.)
-- ✅ Работа с **любой установкой GitLab** (корпоративные сервера, gitlab.com)
-- ✅ Получение diff через GitLab API
-- ✅ Настраиваемые промпты для ревью
-- ✅ Красивый UI с тёмной темой
-- ✅ Поддержка Markdown в результатах
-
-## Установка
-
-### 1. Загрузите расширение в Chrome
-
-1. Откройте Chrome и перейдите на `chrome://extensions/`
-2. Включите **Developer mode** (переключатель в правом верхнем углу)
-3. Нажмите **Load unpacked**
-4. Выберите папку с расширением (`chrome-mr-plug`)
-
-### 2. Настройте подключение к LLM
-
-1. Кликните на иконку расширения в панели инструментов
-2. В настройках укажите:
-   - **API Base URL** - URL к OpenAI-совместимому API
-   - **API Key** - ключ авторизации (если требуется)
-   - **Model** - название модели
-3. Нажмите **Test Connection** для проверки
-4. Нажмите **Save Settings**
-
-### 3. Получите GitLab Token (если требуется)
-
-Для доступа к приватным репозиториям нужен GitLab Personal Access Token:
-
-1. В GitLab перейдите в **User Settings** → **Access Tokens**
-2. Создайте токен с правом `read_api`
-3. Токен автоматически подхватится из сессии GitLab
-
-> **Примечание:** Если вы авторизованы в GitLab, расширение попытается использовать вашу сессию. Для приватных инстансов может потребоваться явный токен.
-
-## Настройка LLM
+## LLM Configuration Examples
 
 ### OpenAI
 
@@ -103,11 +50,11 @@ API Key: sk-...
 Model: gpt-4o
 ```
 
-### Ollama (локальная)
+### Ollama (local, free)
 
 ```
 API Base URL: http://localhost:11434/v1
-API Key: (оставьте пустым)
+API Key: (leave empty)
 Model: llama3.1:70b
 ```
 
@@ -115,7 +62,7 @@ Model: llama3.1:70b
 
 ```
 API Base URL: http://your-vllm-server:8000/v1
-API Key: (ваш ключ или оставьте пустым)
+API Key: (your key or leave empty)
 Model: meta-llama/Meta-Llama-3-70B-Instruct
 ```
 
@@ -123,80 +70,72 @@ Model: meta-llama/Meta-Llama-3-70B-Instruct
 
 ```
 API Base URL: http://localhost:1234/v1
-API Key: (оставьте пустым)
-Model: (название загруженной модели)
+API Key: (leave empty)
+Model: (loaded model name)
 ```
 
-### Другие совместимые API
+### Other Compatible APIs
 
-Любой сервис, поддерживающий `/chat/completions` endpoint в формате OpenAI:
+Any service supporting the `/chat/completions` endpoint in OpenAI format:
 - Together AI
 - OpenRouter
-- Azure OpenAI (с соответствующим URL)
-- Локальные серверы (text-generation-webui, tabby, и др.)
+- Azure OpenAI (with appropriate URL)
+- Local servers (text-generation-webui, tabby, etc.)
 
-## Использование
+## Usage
 
-1. Откройте любой Merge Request в GitLab
-2. В шапке MR появится кнопка **🤖 AI Review**
-3. Нажмите на неё и дождитесь результата
-4. AI проанализирует diff и выдаст ревью
+1. Open any Merge Request in GitLab
+2. The **🤖 AI Review** button appears in the MR header
+3. Click it and wait for the result
+4. AI analyzes the diff and provides a review
 
-## Структура проекта
+## Prompt Customization
+
+By default, the prompt asks the AI to focus on:
+- Bugs and logical errors
+- Security vulnerabilities
+- Performance issues
+- Code quality
+- Specific improvement suggestions
+
+You can provide your own prompt in the extension settings.
+
+## Limitations
+
+- **Diff size:** Limited to 5000 lines by default (configurable)
+- **Tokens:** Large MRs may exceed your model's token limit
+- **Private repositories:** May require a GitLab Personal Access Token
+
+## Project Structure
 
 ```
-chrome-mr-plug/
-├── manifest.json       # Манифест расширения (V3)
-├── background.js       # Service Worker (API вызовы)
-├── content.js          # Content Script (инжект на страницу)
-├── styles.css          # Стили для UI расширения
-├── popup.html          # UI попапа настроек
-├── popup.js            # Логика попапа
-├── icons/              # Иконки расширения
+chrome-gitlab-review/
+├── manifest.json       # Extension manifest (V3)
+├── background.js       # Service Worker (API calls)
+├── content.js          # Content Script (page injection)
+├── styles.css          # UI styles
+├── popup.html          # Settings popup UI
+├── popup.js            # Popup logic
+├── icons/              # Extension icons
 │   ├── icon16.png
 │   ├── icon48.png
 │   ├── icon128.png
 │   └── generate_icons.py
-└── README.md           # Этот файл
+└── README.md           # This file
 ```
 
-## Настройка промпта
+## Debugging
 
-По умолчанию используется промпт, который просит AI фокусироваться на:
-- Багах и логических ошибках
-- Уязвимостях безопасности
-- Проблемах производительности
-- Качестве кода
-- Конкретных предложениях по улучшению
+- **Content script:** Open DevTools on the GitLab page → Console
+- **Background script:** `chrome://extensions/` → Details → Service Worker → Inspect
+- **Popup:** Open the popup, right-click → Inspect
 
-Вы можете задать свой промпт в настройках расширения.
+## Security
 
-## Ограничения
+- API keys are stored only in Chrome's local storage
+- All requests go directly from your machine
+- No data is sent to third-party servers (except your chosen LLM)
 
-- **Размер diff:** По умолчанию ограничен 5000 строк (настраивается)
-- **Токены:** Большие MR могут превысить лимит токенов вашей модели
-- **Приватные репозитории:** Может потребоваться GitLab Personal Access Token
-
-## Разработка
-
-### Перезагрузка расширения
-
-1. Перейдите на `chrome://extensions/`
-2. Найдите "GitLab MR AI Reviewer"
-3. Нажмите иконку обновления 🔄
-
-### Отладка
-
-- **Content script:** Откройте DevTools страницы GitLab → Console
-- **Background script:** `chrome://extensions/` → Details → Service Worker
-- **Popup:** Откройте popup, ПКМ → Inspect
-
-## Лицензия
+## License
 
 MIT
-
-## Безопасность
-
-- API ключи хранятся только в локальном хранилище Chrome
-- Все запросы идут напрямую с вашего компьютера
-- Никакие данные не отправляются на сторонние серверы (кроме выбранной LLM)

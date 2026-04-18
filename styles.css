@@ -269,6 +269,191 @@
   font-weight: 600;
 }
 
+/* ===== Issue Blocks ===== */
+
+.issue-block {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  margin: 16px 0;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.issue-block-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+  gap: 12px;
+}
+
+.issue-block-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.issue-block-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.issue-block-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2937;
+  flex: 1;
+  min-width: 0;
+}
+
+.issue-block-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #4b5563;
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.issue-block-copy:hover {
+  background: #f3f4f6;
+  border-color: #667eea;
+  color: #667eea;
+}
+
+.issue-block-copy.copied {
+  background: #d1fae5;
+  border-color: #10b981;
+  color: #10b981;
+}
+
+.copy-icon {
+  font-size: 14px;
+}
+
+/* Severity badge */
+.issue-severity {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+/* File/line reference link */
+.issue-line-ref {
+  color: #667eea;
+  text-decoration: none;
+  font-size: 12px;
+  transition: color 0.2s;
+}
+
+.issue-line-ref:hover {
+  color: #764ba2;
+  text-decoration: underline;
+}
+
+/* Issue content */
+.issue-block-content {
+  padding: 16px;
+  color: #1f2937;
+}
+
+.issue-description {
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+
+/* Suggestion box */
+.issue-suggestion {
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #0c4a6e;
+}
+
+.issue-suggestion strong {
+  color: #0369a1;
+}
+
+/* Review summary */
+.review-summary {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 16px 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.review-summary h4 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2937;
+  flex: 1;
+}
+
+.review-summary-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #4b5563;
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.review-summary-copy:hover {
+  background: #f3f4f6;
+  border-color: #667eea;
+  color: #667eea;
+}
+
+.review-summary-copy.copied {
+  background: #d1fae5;
+  border-color: #10b981;
+  color: #10b981;
+}
+
+/* Fallback for non-JSON reviews */
+.ai-review-fallback {
+  white-space: pre-wrap;
+  font-family: inherit;
+}
+
+.issue-block-content pre {
+  margin: 12px 0;
+}
+
+.issue-block-content ul,
+.issue-block-content ol {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+
 /* ===== Responsive ===== */
 
 @media (max-width: 768px) {
@@ -283,6 +468,16 @@
   #ai-review-btn {
     font-size: 12px;
     padding: 6px 12px;
+  }
+
+  .issue-block-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .issue-block-copy {
+    width: 100%;
+    justify-content: center;
   }
 }
 
@@ -336,5 +531,86 @@
 
   .ai-review-status {
     color: #9ca3af;
+  }
+
+  .issue-block {
+    background: #1f2937;
+    border-color: #374151;
+  }
+
+  .issue-block-header {
+    background: #111827;
+    border-color: #374151;
+  }
+
+  .issue-block-title {
+    color: #f9fafb;
+  }
+
+  .issue-block-copy {
+    color: #d1d5db;
+    background: #374151;
+    border-color: #4b5563;
+  }
+
+  .issue-block-copy:hover {
+    background: #4b5563;
+    border-color: #818cf8;
+    color: #818cf8;
+  }
+
+  .issue-block-copy.copied {
+    background: #064e3b;
+    border-color: #10b981;
+    color: #10b981;
+  }
+
+  .issue-block-content {
+    color: #f9fafb;
+  }
+
+  .issue-line-ref {
+    color: #818cf8;
+  }
+
+  .issue-line-ref:hover {
+    color: #a5b4fc;
+  }
+
+  .issue-suggestion {
+    background: #0c4a6e;
+    border-color: #075985;
+    color: #e0f2fe;
+  }
+
+  .issue-suggestion strong {
+    color: #7dd3fc;
+  }
+
+  .review-summary {
+    background: #111827;
+    border-color: #374151;
+  }
+
+  .review-summary h4 {
+    color: #f9fafb;
+  }
+
+  .review-summary-copy {
+    color: #d1d5db;
+    background: #374151;
+    border-color: #4b5563;
+  }
+
+  .review-summary-copy:hover {
+    background: #4b5563;
+    border-color: #818cf8;
+    color: #818cf8;
+  }
+
+  .review-summary-copy.copied {
+    background: #064e3b;
+    border-color: #10b981;
+    color: #10b981;
   }
 }

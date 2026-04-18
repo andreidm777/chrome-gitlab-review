@@ -1,3 +1,49 @@
+// ===== JSON Parsing Helpers =====
+
+/**
+ * Extract JSON from LLM response. Handles markdown-wrapped JSON, extra text, etc.
+ * Returns parsed object or null if parsing fails.
+ */
+function parseReviewJSON(text) {
+  if (!text) return null;
+
+  // If already valid JSON, return it
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === 'object') return parsed;
+  } catch (e) {
+    // Not valid JSON yet
+  }
+
+  // Try to extract JSON from markdown code blocks: ```json ... ``` or ``` ... ```
+  const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)```/;
+  const codeBlockMatch = text.match(codeBlockRegex);
+  if (codeBlockMatch) {
+    try {
+      const parsed = JSON.parse(codeBlockMatch[1].trim());
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch (e) {
+      // Not valid JSON in code block
+    }
+  }
+
+  // Try to find JSON object by matching { ... }
+  // Find first { and last }
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    const candidate = text.substring(firstBrace, lastBrace + 1);
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch (e) {
+      // Not valid JSON in braces
+    }
+  }
+
+  return null;
+}
+
 // ===== GitLab API Integration =====
 
 /**
@@ -232,16 +278,38 @@ async function handleAsyncMessage(message, sender) {
         payload: { stage: 'reviewing', message: 'Analyzing ' + diffText.split('\n').length + ' lines of diff...' }
       });
 
-      // Get settings
-      const settings = await chrome.storage.local.get({
-        apiUrl: 'https://api.openai.com/v1',
-        apiKey: '',
-        model: 'gpt-4o',
+      // Get active LLM profile + global settings
+      const allSettings = await chrome.storage.local.get({
+        llmProfiles: [],
+        activeProfileId: null,
         reviewPrompt: '',
         maxDiffSize: 10000
       });
 
-      // Use default prompt if not set (Russian)
+      // Resolve active profile
+      let profile = null;
+      if (allSettings.activeProfileId && allSettings.llmProfiles.length > 0) {
+        profile = allSettings.llmProfiles.find(p => p.id === allSettings.activeProfileId);
+      }
+
+      if (!profile) {
+        // Fallback: try first profile
+        profile = allSettings.llmProfiles.length > 0 ? allSettings.llmProfiles[0] : null;
+      }
+
+      if (!profile) {
+        return { success: false, error: 'Нет профилей LLM. Добавьте профиль в настройках.' };
+      }
+
+      const settings = {
+        apiUrl: profile.apiUrl,
+        apiKey: profile.apiKey || '',
+        model: profile.model,
+        reviewPrompt: allSettings.reviewPrompt,
+        maxDiffSize: allSettings.maxDiffSize || 10000
+      };
+
+      // Use default prompt if not set (Russian) — returns JSON
       const defaultPrompt = 'Вы — опытный рецензент кода. Проведите код-ревью диффа из Merge Request в GitLab.\n\n' +
         'Ваша задача:\n' +
         '1. **Найти баги и потенциальные проблемы** — логические ошибки, краевые случаи, race conditions, утечки памяти\n' +
@@ -249,17 +317,57 @@ async function handleAsyncMessage(message, sender) {
         '3. **Отметить проблемы производительности** — неэффективные алгоритмы, излишняя сложность\n' +
         '4. **Оценить качество кода** — читаемость, поддерживаемость, best practices\n' +
         '5. **Предложить улучшения** — конкретные рекомендации с примерами кода\n\n' +
-        'Форматируйте ответ в markdown. Будьте кратки, но подробны. Фокусируйтесь на существенных проблемах, а не на предпочтениях по стилю. пиши на русском языке\n\n' +
+        'ОЧЕНЬ ВАЖНО: Ответь ТОЛЬКО в формате JSON. Не добавляй ничего кроме JSON. Без markdown обёрток, без текста.\n\n' +
+        'Формат JSON:\n' +
+        '```\n' +
+        '{\n' +
+        '  "summary": "Краткое резюме изменений в MR",\n' +
+        '  "issues": [\n' +
+        '    {\n' +
+        '      "title": "Краткое название проблемы",\n' +
+        '      "severity": "critical | major | minor | suggestion",\n' +
+        '      "description": "Подробное описание проблемы",\n' +
+        '      "suggestion": "Рекомендация по исправлению (может быть null)",\n' +
+        '      "file": "путь/к/файлу.js",\n' +
+        '      "line": 42\n' +
+        '    }\n' +
+        '  ]\n' +
+        '}\n' +
+        '```\n\n' +
+        'Правила:\n' +
+        '- severity: "critical" — баги/утязимости, "major" — проблемы, "minor" — замечания, "suggestion" — улучшения\n' +
+        '- "file" и "line" — укажи если проблема в конкретном файле (по диффу видно изменение строк)\n' +
+        '- "suggestion" — опиши как исправить (код или текст), может быть null\n' +
+        '- Будь конкретен, ссылайся на строчки кода из диффа\n' +
+        '- Пиши на русском языке\n' +
+        '- Файлы: "old_path" или "new_path" из заголовка диффа (обычно одинаковые)\n\n' +
         'Вот дифф:';
 
       settings.reviewPrompt = settings.reviewPrompt || defaultPrompt;
 
       // Call LLM
-      const review = await reviewWithLLM(diffText, settings, mrDetails);
+      const rawReview = await reviewWithLLM(diffText, settings, mrDetails);
+
+      // Try to parse JSON response
+      let reviewData = parseReviewJSON(rawReview);
+
+      if (!reviewData) {
+        // Retry with correction prompt if JSON parsing failed
+        try {
+          const retryPrompt = 'Ошибка! Ваш ответ не является валидным JSON. Переотвечай ТОЛЬКО в формате JSON. Без текста, без markdown. Вот предыдущий ответ:\n\n' + rawReview;
+
+          const retrySettings = { ...settings, reviewPrompt: retryPrompt };
+          const retryReview = await reviewWithLLM(diffText, retrySettings, mrDetails);
+          reviewData = parseReviewJSON(retryReview);
+        } catch (retryErr) {
+          // If retry fails, return raw review as fallback
+          console.warn('JSON parse retry failed, returning raw review');
+        }
+      }
 
       return {
         success: true,
-        review
+        review: reviewData || rawReview
       };
     }
 
