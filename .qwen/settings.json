@@ -10,7 +10,8 @@
       "Bash(./start.sh)",
       "Bash(hexdump *)",
       "Bash(xxd)",
-      "Bash(node *)"
+      "Bash(node *)",
+      "Bash(file *)"
     ]
   },
   "$version": 3

@@ -2,6 +2,103 @@
 
 let gitLabInfo = null;
 let isInitialized = false;
+let diffLineMap = {};
+let diffFileHashes = {};
+
+function sha1Sync(str) {
+  function rotl(n, x) { return ((x << n) | (x >>> (32 - n))); }
+  function toHex(n) { return (n >>> 0).toString(16).padStart(8, '0'); }
+
+  const msg = new TextEncoder().encode(str);
+  const len = msg.length;
+  const bitLen = len * 8;
+
+  const paddedLen = Math.ceil((len + 9) / 64) * 64;
+  const buf = new Uint8Array(paddedLen);
+  buf.set(msg);
+  buf[len] = 0x80;
+  const view = new DataView(buf.buffer);
+  view.setUint32(paddedLen - 4, bitLen, false);
+
+  let h0 = 0x67452301, h1 = 0xEFCDAB89, h2 = 0x98BADCFE, h3 = 0x10325476, h4 = 0xC3D2E1F0;
+
+  for (let offset = 0; offset < paddedLen; offset += 64) {
+    const w = new Uint32Array(80);
+    for (let i = 0; i < 16; i++) w[i] = view.getUint32(offset + i * 4, false);
+    for (let i = 16; i < 80; i++) { const x = w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16]; w[i] = rotl(1, x); }
+
+    let a = h0, b = h1, c = h2, d = h3, e = h4;
+    for (let i = 0; i < 80; i++) {
+      let f, k;
+      if (i < 20) { f = (b & c) | (~b & d); k = 0x5A827999; }
+      else if (i < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1; }
+      else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC; }
+      else { f = b ^ c ^ d; k = 0xCA62C1D6; }
+      const temp = (rotl(5, a) + f + e + k + w[i]) >>> 0;
+      e = d; d = c; c = rotl(30, b); b = a; a = temp;
+    }
+    h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0;
+    h3 = (h3 + d) >>> 0; h4 = (h4 + e) >>> 0;
+  }
+
+  return toHex(h0) + toHex(h1) + toHex(h2) + toHex(h3) + toHex(h4);
+}
+
+function getCsrfToken() {
+    return document.querySelector('meta[name="csrf-token"]')?.content;
+}
+
+async function createDraftCommentWithCookies(baseUrl, filePath, lineNumber, commentText) {
+    const csrfToken = getCsrfToken();
+    
+    if (!csrfToken) {
+        throw new Error('CSRF token not found on the page');
+    }
+
+    const diffRefs = gitLabInfo?.diffRefs;
+    if (!diffRefs?.base_sha || !diffRefs?.start_sha || !diffRefs?.head_sha) {
+        throw new Error('diff_refs not available');
+    }
+
+    const position = {
+        position_type: "text",
+        old_path: filePath,
+        new_path: filePath,
+        base_sha: diffRefs.base_sha,
+        start_sha: diffRefs.start_sha,
+        head_sha: diffRefs.head_sha,
+        new_line: lineNumber
+    };
+
+    const fileMap = diffLineMap[filePath] || {};
+    const oldLine = fileMap[lineNumber];
+    if (oldLine && oldLine !== lineNumber) {
+        position.old_line = oldLine;
+    }
+
+    const response = await fetch(
+        `${gitLabInfo.baseUrl}/api/v4/projects/${gitLabInfo.projectId}/merge_requests/${gitLabInfo.mergeRequestIid}/draft_notes`,
+        {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'X-CSRF-Token': csrfToken,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                note: commentText,
+                position: position
+            })
+        }
+    );
+    
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`GitLab API error (${response.status}): ${errorText}`);
+    }
+    
+    return response.json();
+}
 
 /**
  * Check if we're on a GitLab MR page
@@ -23,6 +120,52 @@ function detectMRPage() {
 
 // ===== GitLab API Integration (using same-origin requests with cookies) =====
 
+function buildDiffLineMap(diffs) {
+  diffLineMap = {};
+
+  for (const diff of diffs) {
+    const filePath = diff.new_path || diff.old_path;
+    const lines = (diff.diff || '').split('\n');
+    const fileMap = {};
+
+    diffFileHashes[filePath] = sha1Sync(filePath);
+
+    let oldLine = 0;
+    let newLine = 0;
+    let lastOldLine = 0;
+    let inHunk = false;
+
+    for (const line of lines) {
+      const hunkMatch = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (hunkMatch) {
+        oldLine = parseInt(hunkMatch[1], 10);
+        newLine = parseInt(hunkMatch[2], 10);
+        lastOldLine = oldLine > 0 ? oldLine - 1 : 0;
+        inHunk = true;
+        continue;
+      }
+
+      if (!inHunk) continue;
+      if (line.startsWith('\\')) continue;
+
+      if (line.startsWith('-')) {
+        lastOldLine = oldLine;
+        oldLine++;
+      } else if (line.startsWith('+')) {
+        fileMap[newLine] = lastOldLine;
+        newLine++;
+      } else {
+        fileMap[newLine] = oldLine;
+        lastOldLine = oldLine;
+        oldLine++;
+        newLine++;
+      }
+    }
+
+    diffLineMap[filePath] = fileMap;
+  }
+}
+
 /**
  * Fetch MR diff from GitLab API using same-origin request (uses session cookies)
  */
@@ -43,6 +186,8 @@ async function fetchGitLabDiff(baseUrl, projectId, mergeRequestIid) {
     }
 
     const diffs = await response.json();
+
+    buildDiffLineMap(diffs);
 
     // Combine all diffs into a single text
     const diffText = diffs.map(diff => {
@@ -78,33 +223,6 @@ async function fetchGitLabDetails(baseUrl, projectId, mergeRequestIid) {
     return await response.json();
   } catch (err) {
     throw new Error(`Failed to fetch MR details: ${err.message}`);
-  }
-}
-
-/**
- * Get MR head commit hash using same-origin request
- */
-async function fetchGitLabCommitHash(baseUrl, projectId, mergeRequestIid) {
-  const url = `${baseUrl}/api/v4/projects/${projectId}/merge_requests/${mergeRequestIid}/commits`;
-
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json'
-      }
-    });
-
-    if (!response.ok) {
-      throw new Error(`GitLab API error: ${response.status} ${response.statusText}`);
-    }
-
-    const commits = await response.json();
-    // First commit in the list is the head commit
-    return commits && commits.length > 0 ? commits[0].short_id : null;
-  } catch (err) {
-    console.warn('Failed to fetch MR commit hash:', err.message);
-    return null;
   }
 }
 
@@ -250,13 +368,12 @@ async function startReview() {
     // Fetch diff and details using same-origin requests (with cookies)
     content.querySelector('.ai-review-status').textContent = 'Загрузка диффа...';
     
-    const [diffText, mrDetails, commitHash] = await Promise.all([
+    const [diffText, mrDetails] = await Promise.all([
       fetchGitLabDiff(gitLabInfo.baseUrl, gitLabInfo.projectId, gitLabInfo.mergeRequestIid),
-      fetchGitLabDetails(gitLabInfo.baseUrl, gitLabInfo.projectId, gitLabInfo.mergeRequestIid),
-      fetchGitLabCommitHash(gitLabInfo.baseUrl, gitLabInfo.projectId, gitLabInfo.mergeRequestIid)
+      fetchGitLabDetails(gitLabInfo.baseUrl, gitLabInfo.projectId, gitLabInfo.mergeRequestIid)
     ]);
 
-    gitLabInfo.headCommitHash = commitHash;
+    gitLabInfo.diffRefs = mrDetails?.diff_refs || null;
 
     if (!diffText) {
       throw new Error('No diff found. The MR may not have any changes.');
@@ -278,6 +395,22 @@ async function startReview() {
           ${html}
         </div>
       `;
+
+      content.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+
+        const action = btn.dataset.action;
+        if (action === 'copy') {
+          const block = btn.closest('.issue-block');
+          copyIssueBlock(block?.id);
+        } else if (action === 'draft') {
+          const block = btn.closest('.issue-block');
+          createDraftComment(block?.id, btn.dataset.file, parseInt(btn.dataset.line, 10));
+        } else if (action === 'copy-text') {
+          copyText(btn.dataset.text);
+        }
+      });
     } else {
       throw new Error(reviewResponse.error || 'Unknown error occurred');
     }
@@ -335,7 +468,7 @@ function renderReviewJSON(review) {
     html += `
       <div class="review-summary">
         <h4>${escapeHtml(review.summary)}</h4>
-        <button class="review-summary-copy" onclick="copyText(${JSON.stringify(review.summary).replace(/"/g, '&quot;')})" title="Копировать резюме">
+        <button class="review-summary-copy" data-action="copy-text" data-text="${escapeHtml(review.summary).replace(/"/g, '&quot;')}" title="Копировать резюме">
           <span class="copy-icon">📋</span>
           <span class="copy-text">Копировать</span>
         </button>
@@ -419,10 +552,16 @@ function renderIssueCard(issue) {
             ${lineRef}
           </div>
         </div>
-        <button class="issue-block-copy" onclick="copyIssueBlock('${id}')" title="Копировать">
-          <span class="copy-icon">📋</span>
-          <span class="copy-text">Копировать</span>
-        </button>
+        <div class="issue-block-actions">
+          ${issue.file && issue.line ? `<button class="issue-block-draft" data-action="draft" data-file="${escapeHtml(issue.file)}" data-line="${issue.line}" title="Создать черновик комментария">
+            <span class="draft-icon">💬</span>
+            <span class="draft-text">Draft</span>
+          </button>` : ''}
+          <button class="issue-block-copy" data-action="copy" title="Копировать">
+            <span class="copy-icon">📋</span>
+            <span class="copy-text">Копировать</span>
+          </button>
+        </div>
       </div>
       <div class="issue-block-content">
         <div class="issue-description">${descHtml}</div>
@@ -440,13 +579,12 @@ function buildGitLabLineUrl(filePath, lineNumber) {
     return '#';
   }
 
-  // GitLab MR diff line URL format — use projectPath as-is (GitLab handles slashes in paths)
-  // Append commit hash anchor for GitLab scroll-to-line behavior
+  const fileMap = diffLineMap[filePath] || {};
+  const oldLine = fileMap[lineNumber] || lineNumber;
+  const fileHash = diffFileHashes[filePath] || sha1Sync(filePath);
+
   let url = `${gitLabInfo.baseUrl}/${gitLabInfo.projectPath}/-/merge_requests/${gitLabInfo.mergeRequestIid}/diffs?drop_tab_selection=true&line=${lineNumber}`;
-  
-  if (gitLabInfo.headCommitHash) {
-    url += `#${gitLabInfo.headCommitHash}_${lineNumber}_${lineNumber}`;
-  }
+  url += `#${fileHash}_${oldLine}_${lineNumber}`;
 
   return url;
 }
@@ -490,9 +628,44 @@ async function copyIssueBlock(elementId) {
   }
 }
 
+async function createDraftComment(elementId, filePath, lineNumber) {
+  const element = document.getElementById(elementId);
+  if (!element) return;
+
+  const button = element.querySelector('.issue-block-draft');
+  if (!button || button.disabled) return;
+
+  const title = element.querySelector('.issue-block-title')?.textContent || '';
+  const desc = element.querySelector('.issue-description')?.textContent || '';
+  const suggestion = element.querySelector('.issue-suggestion')?.textContent || '';
+  const parts = [title];
+  if (desc) parts.push(desc);
+  if (suggestion) parts.push(suggestion);
+  const commentText = parts.join('\n\n');
+
+  button.disabled = true;
+  button.innerHTML = '<span class="draft-icon">⏳</span><span class="draft-text">...</span>';
+
+  try {
+    await createDraftCommentWithCookies(gitLabInfo.baseUrl.replace(/^https?:\/\//, ''), filePath, lineNumber, commentText);
+    button.innerHTML = '<span class="draft-icon">✓</span><span class="draft-text">Создано</span>';
+    button.classList.add('draft-created');
+    setTimeout(() => {
+      button.innerHTML = '<span class="draft-icon">💬</span><span class="draft-text">Draft</span>';
+      button.classList.remove('draft-created');
+      button.disabled = false;
+    }, 2000);
+  } catch (err) {
+    console.error('Failed to create draft comment:', err);
+    button.innerHTML = '<span class="draft-icon">✗</span><span class="draft-text">Ошибка</span>';
+    setTimeout(() => {
+      button.innerHTML = '<span class="draft-icon">💬</span><span class="draft-text">Draft</span>';
+      button.disabled = false;
+    }, 2000);
+  }
+}
+
 /**
- * Copy text to clipboard (utility)
- */
 async function copyText(text) {
   try {
     await navigator.clipboard.writeText(text);
