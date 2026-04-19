@@ -438,6 +438,33 @@
   color: #10b981;
 }
 
+/* Verdict badge */
+.review-verdict {
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: 6px;
+  padding: 10px 16px;
+  margin: 12px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #065f46;
+}
+
+/* Additional comments section */
+.review-comments {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin: 12px 0;
+  font-size: 14px;
+  color: #92400e;
+}
+
+.review-comments p {
+  margin: 0;
+}
+
 /* Fallback for non-JSON reviews */
 .ai-review-fallback {
   white-space: pre-wrap;
@@ -612,5 +639,17 @@
     background: #064e3b;
     border-color: #10b981;
     color: #10b981;
+  }
+
+  .review-verdict {
+    background: #064e3b;
+    border-color: #10b981;
+    color: #6ee7b7;
+  }
+
+  .review-comments {
+    background: #451a03;
+    border-color: #92400e;
+    color: #fde68a;
   }
 }

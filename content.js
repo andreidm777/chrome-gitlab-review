@@ -7,7 +7,7 @@ let isInitialized = false;
  * Check if we're on a GitLab MR page
  */
 function detectMRPage() {
-  const path = window.location.pathname;
+  const path = decodeURIComponent(window.location.pathname);
   const mrRegex = /(.+)\/-\/merge_requests\/(\d+)/;
   const match = path.match(mrRegex);
 
@@ -78,6 +78,33 @@ async function fetchGitLabDetails(baseUrl, projectId, mergeRequestIid) {
     return await response.json();
   } catch (err) {
     throw new Error(`Failed to fetch MR details: ${err.message}`);
+  }
+}
+
+/**
+ * Get MR head commit hash using same-origin request
+ */
+async function fetchGitLabCommitHash(baseUrl, projectId, mergeRequestIid) {
+  const url = `${baseUrl}/api/v4/projects/${projectId}/merge_requests/${mergeRequestIid}/commits`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`GitLab API error: ${response.status} ${response.statusText}`);
+    }
+
+    const commits = await response.json();
+    // First commit in the list is the head commit
+    return commits && commits.length > 0 ? commits[0].short_id : null;
+  } catch (err) {
+    console.warn('Failed to fetch MR commit hash:', err.message);
+    return null;
   }
 }
 
@@ -177,10 +204,19 @@ function injectUI() {
 
 // ===== Review Flow =====
 
+let isReviewInProgress = false;
+
 /**
  * Start the review process
  */
 async function startReview() {
+  // Prevent concurrent reviews
+  if (isReviewInProgress) {
+    console.warn('startReview called while review is already in progress');
+    return;
+  }
+  isReviewInProgress = true;
+
   const btn = document.getElementById('ai-review-btn');
   const panel = document.getElementById('ai-review-panel');
   const content = panel.querySelector('.ai-review-content');
@@ -214,10 +250,13 @@ async function startReview() {
     // Fetch diff and details using same-origin requests (with cookies)
     content.querySelector('.ai-review-status').textContent = 'Загрузка диффа...';
     
-    const [diffText, mrDetails] = await Promise.all([
+    const [diffText, mrDetails, commitHash] = await Promise.all([
       fetchGitLabDiff(gitLabInfo.baseUrl, gitLabInfo.projectId, gitLabInfo.mergeRequestIid),
-      fetchGitLabDetails(gitLabInfo.baseUrl, gitLabInfo.projectId, gitLabInfo.mergeRequestIid)
+      fetchGitLabDetails(gitLabInfo.baseUrl, gitLabInfo.projectId, gitLabInfo.mergeRequestIid),
+      fetchGitLabCommitHash(gitLabInfo.baseUrl, gitLabInfo.projectId, gitLabInfo.mergeRequestIid)
     ]);
+
+    gitLabInfo.headCommitHash = commitHash;
 
     if (!diffText) {
       throw new Error('No diff found. The MR may not have any changes.');
@@ -251,6 +290,7 @@ async function startReview() {
       </div>
     `;
   } finally {
+    isReviewInProgress = false;
     if (btn) {
       btn.disabled = false;
       btn.innerHTML = '🤖 AI Review';
@@ -303,11 +343,40 @@ function renderReviewJSON(review) {
     `;
   }
 
-  // Issues
-  if (review.issues && Array.isArray(review.issues)) {
-    for (const issue of review.issues) {
-      html += renderIssueCard(issue);
+  // Issues (standard field from our prompt)
+  // Also check 'suggestions' as a fallback (some LLM models use this name)
+  const items = review.issues || review.suggestions || [];
+  if (Array.isArray(items)) {
+    for (const item of items) {
+      // Normalize field names — LLM may return 'message' instead of 'description'
+      // or 'type' instead of 'title'
+      const normalized = {
+        title: item.title || item.type || 'Проблема',
+        severity: item.severity || 'suggestion',
+        description: item.description || item.message || '',
+        suggestion: item.suggestion || '',
+        file: item.file || '',
+        line: item.line || null
+      };
+      html += renderIssueCard(normalized);
     }
+  }
+
+  // Render verdict badge (if provided)
+  if (review.verdict) {
+    const verdictLabel = {
+      approved: '✅ Approved',
+      changes_requested: '🔴 Changes Requested',
+      commented: '💬 Comments'
+    }[review.verdict] || review.verdict;
+    html += `<div class="review-verdict">${verdictLabel}</div>`;
+  }
+
+  // Render additional comments (if provided)
+  if (review.comments && typeof review.comments === 'string' && !review.summary) {
+    html += `<div class="review-summary"><h4>${escapeHtml(review.comments)}</h4></div>`;
+  } else if (review.comments && typeof review.comments === 'string' && review.summary) {
+    html += `<div class="review-comments"><p>${escapeHtml(review.comments).replace(/\n/g, '<br>')}</p></div>`;
   }
 
   return html;
@@ -325,7 +394,7 @@ function renderIssueCard(issue) {
   if (issue.file && issue.line) {
     const gitLabUrl = buildGitLabLineUrl(issue.file, issue.line);
     lineRef = `
-      <a href="${escapeHtml(gitLabUrl)}" class="issue-line-ref" target="_blank" rel="noopener" title="Перейти к строке ${issue.line} в GitLab">
+      <a href="${gitLabUrl}" class="issue-line-ref" target="_blank" rel="noopener" title="Перейти к строке ${issue.line} в GitLab">
         📂 ${escapeHtml(issue.file)}:${issue.line}
       </a>
     `;
@@ -367,15 +436,19 @@ function renderIssueCard(issue) {
  * Build GitLab URL for a specific file and line number
  */
 function buildGitLabLineUrl(filePath, lineNumber) {
-  if (!gitLabInfo || !gitLabInfo.projectId || !gitLabInfo.mergeRequestIid) {
+  if (!gitLabInfo || !gitLabInfo.projectPath || !gitLabInfo.mergeRequestIid) {
     return '#';
   }
 
-  // Encode the file path for URL
-  const encodedPath = encodeURIComponent(filePath);
+  // GitLab MR diff line URL format — use projectPath as-is (GitLab handles slashes in paths)
+  // Append commit hash anchor for GitLab scroll-to-line behavior
+  let url = `${gitLabInfo.baseUrl}/${gitLabInfo.projectPath}/-/merge_requests/${gitLabInfo.mergeRequestIid}/diffs?drop_tab_selection=true&line=${lineNumber}`;
+  
+  if (gitLabInfo.headCommitHash) {
+    url += `#${gitLabInfo.headCommitHash}_${lineNumber}_${lineNumber}`;
+  }
 
-  // GitLab MR diff line URL format
-  return `${gitLabInfo.baseUrl}/${gitLabInfo.projectId}/-/merge-requests/${gitLabInfo.mergeRequestIid}/diffs?diff_id=${Date.now()}&drop_tab_selection=true&line=${lineNumber}`;
+  return url;
 }
 
 /**

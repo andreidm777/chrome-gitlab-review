@@ -7,7 +7,10 @@
       "Bash(docker *)",
       "Bash(docker compose version)",
       "Bash(docker-compose *)",
-      "Bash(./start.sh)"
+      "Bash(./start.sh)",
+      "Bash(hexdump *)",
+      "Bash(xxd)",
+      "Bash(node *)"
     ]
   },
   "$version": 3

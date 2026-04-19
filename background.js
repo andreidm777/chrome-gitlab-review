@@ -61,10 +61,11 @@ function extractGitLabInfo(tabUrl) {
     return null;
   }
 
+  const fullProjectPath = match[1].substring(1); // Remove leading /
   return {
     baseUrl: url.protocol + '//' + url.host,
-    projectPath: match[1].substring(1), // Remove leading /
-    projectId: encodeURIComponent(match[1].substring(1)), // URL encoded for API
+    projectPath: fullProjectPath, // Remove leading /
+    projectId: encodeURIComponent(fullProjectPath), // URL encoded for API
     mergeRequestIid: match[2]
   };
 }
@@ -113,6 +114,63 @@ async function testLLMConnection({ apiUrl, apiKey, model }) {
 }
 
 /**
+ * Build messages array for LLM API call (without sending)
+ */
+function buildMessages(diffText, settings, mrDetails) {
+  const { reviewPrompt, maxDiffSize } = settings;
+
+  // Split diff into chunks
+  const chunks = chunkText(diffText, maxDiffSize);
+
+  // Build context from MR details
+  let contextInfo = '';
+  if (mrDetails) {
+    contextInfo = 'MR Title: ' + mrDetails.title + '\n';
+    const sourceBranch = String(mrDetails.source_branch).replace(/→/g, '->');
+    const targetBranch = String(mrDetails.target_branch).replace(/→/g, '->');
+    contextInfo += 'Source: ' + sourceBranch + ' -> ' + targetBranch + '\n';
+    if (mrDetails.description) {
+      contextInfo += 'Description: ' + String(mrDetails.description).substring(0, 1000) + '\n';
+    }
+    contextInfo += '\n';
+  }
+
+  // Prepare messages array
+  const messages = [
+    { role: 'system', content: 'Ты помощник в ревью кода, отвечай на русском языке.' }
+  ];
+
+  // Send MR context first (if any)
+  if (contextInfo) {
+    messages.push({ role: 'user', content: 'Контекст Merge Request:\n' + contextInfo });
+  }
+
+  // Send each chunk of the diff
+  for (let i = 0; i < chunks.length; i++) {
+    const isLastChunk = i === chunks.length - 1;
+    const chunkPrefix = chunks.length > 1 ? `Часть ${i + 1} из ${chunks.length}: ` : '';
+
+    const continuation = isLastChunk ? '' : '\n\n(Продолжение следует...)';
+    messages.push({
+      role: 'user',
+      content: chunkPrefix + chunks[i] + continuation
+    });
+  }
+
+  // Final instruction — use reviewPrompt if set
+  if (reviewPrompt) {
+    messages.push({ role: 'user', content: reviewPrompt });
+  }
+
+  // Remove control characters (except common whitespace like \n, \r, \t)
+  for (const msg of messages) {
+    msg.content = msg.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+  }
+
+  return messages;
+}
+
+/**
  * Split text into chunks for processing
  */
 function chunkText(text, maxLinesPerChunk) {
@@ -128,79 +186,25 @@ function chunkText(text, maxLinesPerChunk) {
 
 /**
  * Send diff to LLM for code review - handles large diffs by chunking
+ * Uses buildMessages() to construct the conversation, then sends one request.
  */
 async function reviewWithLLM(diffText, settings, mrDetails) {
-  const { apiUrl, apiKey, model, reviewPrompt, maxDiffSize } = settings;
+  const { apiUrl, apiKey, model } = settings;
 
-  // Split diff into chunks
-  const chunks = chunkText(diffText, maxDiffSize);
-  
-  // Build context from MR details
-  let contextInfo = '';
-  if (mrDetails) {
-    contextInfo = 'MR Title: ' + mrDetails.title + '\n';
-    const sourceBranch = String(mrDetails.source_branch).replace(/→/g, '->');
-    const targetBranch = String(mrDetails.target_branch).replace(/→/g, '->');
-    contextInfo += 'Source: ' + sourceBranch + ' -> ' + targetBranch + '\n';
-    if (mrDetails.description) {
-      contextInfo += 'Description: ' + String(mrDetails.description).substring(0, 1000) + '\n';
-    }
-    contextInfo += '\n';
-  }
-
-  // Prepare messages array for streaming context
-  const messages = [
-    { role: 'system', content: 'Ты помошник в ревью коде, отвечай на русском языке.' }
-  ];
-
-  // Add MR context
-  if (contextInfo) {
-    messages.push({ role: 'user', content: 'Контекст Merge Request:\n' + contextInfo });
-    messages.push({ role: 'assistant', content: 'Принято. Жду дифф для анализа.' });
-  }
-
-  // Send each chunk
-  for (let i = 0; i < chunks.length; i++) {
-    const isLastChunk = i === chunks.length - 1;
-    const chunkPrefix = chunks.length > 1 ? `Часть ${i + 1} из ${chunks.length}: ` : '';
-    
-    const continuation = isLastChunk ? '' : '\n\n(Продолжение следует...)';
-    messages.push({
-      role: 'user',
-      content: chunkPrefix + chunks[i] + continuation
-    });
-    
-    messages.push({
-      role: 'assistant',
-      content: isLastChunk ? '' : 'Получил, жду следующую часть.'
-    });
-  }
-
-  // Final prompt asking for full review
-  const finalPrompt = chunks.length > 1 
-    ? `Это весь дифф. Теперь проведи полное код-ревью всего кода, который я прислал.`
-    : `Вот дифф для анализа:\n\n${diffText}`;
-
-  messages.push({ role: 'user', content: finalPrompt });
-
-  // Remove control characters (except common whitespace like \n, \r, \t)
-  for (const msg of messages) {
-    msg.content = msg.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-  }
+  const messages = buildMessages(diffText, settings, mrDetails);
 
   const url = apiUrl + '/chat/completions';
 
   const body = {
     model: model,
     messages: messages,
-    temperature: 0.7,
+    temperature: 1.0,
     max_tokens: 8192
   };
 
   const headers = new Headers();
   headers.append('Content-Type', 'application/json; charset=utf-8');
   if (apiKey) {
-    // Clean apiKey to ensure it's ASCII-only
     const cleanApiKey = String(apiKey).replace(/[^\x00-\x7F]/g, '');
     headers.append('Authorization', 'Bearer ' + cleanApiKey);
   }
@@ -221,6 +225,9 @@ async function reviewWithLLM(diffText, settings, mrDetails) {
 }
 
 // ===== Message Handler =====
+
+// Track active reviews per tab to prevent concurrent reviews
+const activeReviews = new Map();
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handleAsyncMessage(message, sender).then(sendResponse);
@@ -250,125 +257,171 @@ async function handleAsyncMessage(message, sender) {
         return { success: false, error: 'Cannot determine tab ID' };
       }
 
-      // Send progress update
-      chrome.tabs.sendMessage(senderTabId, {
-        action: 'review-progress',
-        payload: { stage: 'fetching-diff', message: 'Fetching MR diff...' }
-      });
-
-      // Ask content script to fetch diff using its context (with cookies)
-      const fetchResult = await chrome.tabs.sendMessage(senderTabId, {
-        action: 'fetch-gitlab-data',
-        payload: gitlabInfo
-      });
-
-      if (!fetchResult.success) {
-        throw new Error(fetchResult.error || 'Failed to fetch MR data');
+      // Prevent concurrent reviews on the same tab
+      if (activeReviews.has(senderTabId)) {
+        console.warn('Review already in progress for tab ' + senderTabId);
+        return { success: false, error: 'Ревью уже выполняется для этой вкладки.' };
       }
+      activeReviews.set(senderTabId, true);
 
-      const { diffText, mrDetails } = fetchResult;
+      try {
+        // Send progress update
+        chrome.tabs.sendMessage(senderTabId, {
+          action: 'review-progress',
+          payload: { stage: 'fetching-diff', message: 'Fetching MR diff...' }
+        });
 
-      if (!diffText) {
-        throw new Error('No diff found. The MR may not have any changes.');
-      }
+        // Ask content script to fetch diff using its context (with cookies)
+        const fetchResult = await chrome.tabs.sendMessage(senderTabId, {
+          action: 'fetch-gitlab-data',
+          payload: gitlabInfo
+        });
 
-      // Send progress update
-      chrome.tabs.sendMessage(senderTabId, {
-        action: 'review-progress',
-        payload: { stage: 'reviewing', message: 'Analyzing ' + diffText.split('\n').length + ' lines of diff...' }
-      });
-
-      // Get active LLM profile + global settings
-      const allSettings = await chrome.storage.local.get({
-        llmProfiles: [],
-        activeProfileId: null,
-        reviewPrompt: '',
-        maxDiffSize: 10000
-      });
-
-      // Resolve active profile
-      let profile = null;
-      if (allSettings.activeProfileId && allSettings.llmProfiles.length > 0) {
-        profile = allSettings.llmProfiles.find(p => p.id === allSettings.activeProfileId);
-      }
-
-      if (!profile) {
-        // Fallback: try first profile
-        profile = allSettings.llmProfiles.length > 0 ? allSettings.llmProfiles[0] : null;
-      }
-
-      if (!profile) {
-        return { success: false, error: 'Нет профилей LLM. Добавьте профиль в настройках.' };
-      }
-
-      const settings = {
-        apiUrl: profile.apiUrl,
-        apiKey: profile.apiKey || '',
-        model: profile.model,
-        reviewPrompt: allSettings.reviewPrompt,
-        maxDiffSize: allSettings.maxDiffSize || 10000
-      };
-
-      // Use default prompt if not set (Russian) — returns JSON
-      const defaultPrompt = 'Вы — опытный рецензент кода. Проведите код-ревью диффа из Merge Request в GitLab.\n\n' +
-        'Ваша задача:\n' +
-        '1. **Найти баги и потенциальные проблемы** — логические ошибки, краевые случаи, race conditions, утечки памяти\n' +
-        '2. **Обратить внимание на безопасность** — уязвимости, риски инъекций, утечки данных\n' +
-        '3. **Отметить проблемы производительности** — неэффективные алгоритмы, излишняя сложность\n' +
-        '4. **Оценить качество кода** — читаемость, поддерживаемость, best practices\n' +
-        '5. **Предложить улучшения** — конкретные рекомендации с примерами кода\n\n' +
-        'ОЧЕНЬ ВАЖНО: Ответь ТОЛЬКО в формате JSON. Не добавляй ничего кроме JSON. Без markdown обёрток, без текста.\n\n' +
-        'Формат JSON:\n' +
-        '```\n' +
-        '{\n' +
-        '  "summary": "Краткое резюме изменений в MR",\n' +
-        '  "issues": [\n' +
-        '    {\n' +
-        '      "title": "Краткое название проблемы",\n' +
-        '      "severity": "critical | major | minor | suggestion",\n' +
-        '      "description": "Подробное описание проблемы",\n' +
-        '      "suggestion": "Рекомендация по исправлению (может быть null)",\n' +
-        '      "file": "путь/к/файлу.js",\n' +
-        '      "line": 42\n' +
-        '    }\n' +
-        '  ]\n' +
-        '}\n' +
-        '```\n\n' +
-        'Правила:\n' +
-        '- severity: "critical" — баги/утязимости, "major" — проблемы, "minor" — замечания, "suggestion" — улучшения\n' +
-        '- "file" и "line" — укажи если проблема в конкретном файле (по диффу видно изменение строк)\n' +
-        '- "suggestion" — опиши как исправить (код или текст), может быть null\n' +
-        '- Будь конкретен, ссылайся на строчки кода из диффа\n' +
-        '- Пиши на русском языке\n' +
-        '- Файлы: "old_path" или "new_path" из заголовка диффа (обычно одинаковые)\n\n' +
-        'Вот дифф:';
-
-      settings.reviewPrompt = settings.reviewPrompt || defaultPrompt;
-
-      // Call LLM
-      const rawReview = await reviewWithLLM(diffText, settings, mrDetails);
-
-      // Try to parse JSON response
-      let reviewData = parseReviewJSON(rawReview);
-
-      if (!reviewData) {
-        // Retry with correction prompt if JSON parsing failed
-        try {
-          const retryPrompt = 'Ошибка! Ваш ответ не является валидным JSON. Переотвечай ТОЛЬКО в формате JSON. Без текста, без markdown. Вот предыдущий ответ:\n\n' + rawReview;
-
-          const retrySettings = { ...settings, reviewPrompt: retryPrompt };
-          const retryReview = await reviewWithLLM(diffText, retrySettings, mrDetails);
-          reviewData = parseReviewJSON(retryReview);
-        } catch (retryErr) {
-          // If retry fails, return raw review as fallback
-          console.warn('JSON parse retry failed, returning raw review');
+        if (!fetchResult.success) {
+          throw new Error(fetchResult.error || 'Failed to fetch MR data');
         }
-      }
 
-      return {
-        success: true,
-        review: reviewData || rawReview
-      };
+        const { diffText, mrDetails } = fetchResult;
+
+        if (!diffText) {
+          throw new Error('No diff found. The MR may not have any changes.');
+        }
+
+        // Send progress update
+        chrome.tabs.sendMessage(senderTabId, {
+          action: 'review-progress',
+          payload: { stage: 'reviewing', message: 'Analyzing ' + diffText.split('\n').length + ' lines of diff...' }
+        });
+
+        // Get active LLM profile + global settings
+        const allSettings = await chrome.storage.local.get({
+          llmProfiles: [],
+          activeProfileId: null,
+          reviewPrompt: '',
+          maxDiffSize: 10000
+        });
+
+        // Resolve active profile
+        let profile = null;
+        if (allSettings.activeProfileId && allSettings.llmProfiles.length > 0) {
+          profile = allSettings.llmProfiles.find(p => p.id === allSettings.activeProfileId);
+        }
+
+        if (!profile) {
+          // Fallback: try first profile
+          profile = allSettings.llmProfiles.length > 0 ? allSettings.llmProfiles[0] : null;
+        }
+
+        if (!profile) {
+          return { success: false, error: 'Нет профилей LLM. Добавьте профиль в настройках.' };
+        }
+
+        const settings = {
+          apiUrl: profile.apiUrl,
+          apiKey: profile.apiKey || '',
+          model: profile.model,
+          reviewPrompt: allSettings.reviewPrompt,
+          maxDiffSize: allSettings.maxDiffSize || 10000
+        };
+
+        // Use default prompt if not set (Russian) — returns JSON
+        // This prompt contains ONLY instructions — the diff is sent separately in reviewWithLLM
+        const defaultPrompt = 'Проведите код-ревью диффа, который я прислал выше.\n\n' +
+          'Ваша задача:\n' +
+          '1. **Найти баги и потенциальные проблемы** — логические ошибки, краевые случаи, race conditions, утечки памяти\n' +
+          '2. **Обратить внимание на безопасность** — уязвимости, риски инъекций, утечки данных\n' +
+          '3. **Отметить проблемы производительности** — неэффективные алгоритмы, излишняя сложность\n' +
+          '4. **Оценить качество кода** — читаемость, поддерживаемость, best practices\n' +
+          '5. **Предложить улучшения** — конкретные рекомендации с примерами кода\n\n'
+
+        const staticPrompt = '\nОЧЕНЬ ВАЖНО: Ответь ТОЛЬКО в формате JSON. Не добавляй ничего кроме JSON. Без markdown обёрток, без текста.\n\n' +
+          'Формат JSON:\n' +
+          '```\n' +
+          '{\n' +
+          '  "summary": "Краткое резюме изменений в MR",\n' +
+          '  "issues": [\n' +
+          '    {\n' +
+          '      "title": "Краткое название проблемы",\n' +
+          '      "severity": "critical | major | minor | suggestion",\n' +
+          '      "description": "Подробное описание проблемы",\n' +
+          '      "suggestion": "Рекомендация по исправлению (может быть null)",\n' +
+          '      "file": "путь/к/файлу.js",\n' +
+          '      "line": 42\n' +
+          '    }\n' +
+          '  ]\n' +
+          '}\n' +
+          '```\n\n' +
+          'Правила:\n' +
+          '- severity: "critical" — баги/утязимости, "major" — проблемы, "minor" — замечания, "suggestion" — улучшения\n' +
+          '- "file" и "line" — укажи если проблема в конкретном файле (по диффу видно изменение строк)\n' +
+          '- "suggestion" — опиши как исправить (код или текст), может быть null\n' +
+          '- Будь конкретен, ссылайся на строчки кода из диффа\n' +
+          '- Пиши на русском языке\n' +
+          '- Файлы: "old_path" или "new_path" из заголовка диффа (обычно одинаковые)\n';
+
+        settings.reviewPrompt = settings.reviewPrompt || defaultPrompt;
+        settings.reviewPrompt +=  staticPrompt
+
+        // Call LLM
+        const rawReview = await reviewWithLLM(diffText, settings, mrDetails);
+
+        // Try to parse JSON response
+        let reviewData = parseReviewJSON(rawReview);
+
+        if (!reviewData) {
+          // Retry with correction prompt — send ONLY the correction, not the full conversation
+          try {
+            const correctionMessage = 'Ошибка! Ваш предыдущий ответ не является валидным JSON. Переотвечай ТОЛЬКО в формате JSON. Без текста, без markdown.';
+
+            const correctionHeaders = new Headers();
+            correctionHeaders.append('Content-Type', 'application/json; charset=utf-8');
+            if (settings.apiKey) {
+              const cleanApiKey = String(settings.apiKey).replace(/[^\x00-\x7F]/g, '');
+              correctionHeaders.append('Authorization', 'Bearer ' + cleanApiKey);
+            }
+
+            const correctionMessages = [
+              ...buildMessages(diffText, settings, mrDetails),
+              { role: 'user', content: correctionMessage }
+            ];
+
+            const correctionBody = {
+              model: settings.model,
+              messages: correctionMessages,
+              temperature: 0.7,
+              max_tokens: 8192
+            };
+
+            const correctionUrl = settings.apiUrl + '/chat/completions';
+
+            const correctionResponse = await fetch(correctionUrl, {
+              method: 'POST',
+              headers: correctionHeaders,
+              body: JSON.stringify(correctionBody)
+            });
+
+            if (!correctionResponse.ok) {
+              const error = await correctionResponse.text();
+              throw new Error('LLM API error: ' + correctionResponse.status + ' - ' + error);
+            }
+
+            const correctionData = await correctionResponse.json();
+            const retryReview = correctionData.choices[0]?.message?.content || '';
+            reviewData = parseReviewJSON(retryReview);
+          } catch (retryErr) {
+            // If retry fails, return raw review as fallback
+            console.warn('JSON parse retry failed, returning raw review');
+          }
+        }
+
+        return {
+          success: true,
+          review: reviewData || rawReview
+        };
+      } finally {
+        // Cleanup active review for this tab
+        activeReviews.delete(senderTabId);
+      }
     }
 
     case 'test-llm-connection': {
