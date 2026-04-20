@@ -580,7 +580,7 @@ function buildGitLabLineUrl(filePath, lineNumber) {
   }
 
   const fileMap = diffLineMap[filePath] || {};
-  const oldLine = fileMap[lineNumber] || lineNumber;
+  const oldLine = fileMap[lineNumber] || 0;
   const fileHash = diffFileHashes[filePath] || sha1Sync(filePath);
 
   let url = `${gitLabInfo.baseUrl}/${gitLabInfo.projectPath}/-/merge_requests/${gitLabInfo.mergeRequestIid}/diffs?drop_tab_selection=true&line=${lineNumber}`;
