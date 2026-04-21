@@ -50,7 +50,7 @@ function getCsrfToken() {
 
 async function createDraftCommentWithCookies(baseUrl, filePath, lineNumber, commentText) {
     const csrfToken = getCsrfToken();
-    
+
     if (!csrfToken) {
         throw new Error('CSRF token not found on the page');
     }
@@ -60,6 +60,20 @@ async function createDraftCommentWithCookies(baseUrl, filePath, lineNumber, comm
         throw new Error('diff_refs not available');
     }
 
+    const fileMaps = diffLineMap[filePath] || { toOld: {}, toNew: {} };
+    let newLine, oldLine;
+
+    // Determine if lineNumber refers to old_line or new_line
+    if (fileMaps.toNew[lineNumber] !== undefined) {
+        // lineNumber is old_line
+        oldLine = lineNumber;
+        newLine = fileMaps.toNew[oldLine];
+    } else {
+        // lineNumber is new_line
+        newLine = lineNumber;
+        oldLine = fileMaps.toOld[lineNumber];
+    }
+
     const position = {
         position_type: "text",
         old_path: filePath,
@@ -67,12 +81,10 @@ async function createDraftCommentWithCookies(baseUrl, filePath, lineNumber, comm
         base_sha: diffRefs.base_sha,
         start_sha: diffRefs.start_sha,
         head_sha: diffRefs.head_sha,
-        new_line: lineNumber
+        new_line: newLine
     };
 
-    const fileMap = diffLineMap[filePath] || {};
-    const oldLine = fileMap[lineNumber];
-    if (oldLine && oldLine !== lineNumber) {
+    if (oldLine && oldLine !== newLine) {
         position.old_line = oldLine;
     }
 
@@ -91,12 +103,12 @@ async function createDraftCommentWithCookies(baseUrl, filePath, lineNumber, comm
             })
         }
     );
-    
+
     if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`GitLab API error (${response.status}): ${errorText}`);
     }
-    
+
     return response.json();
 }
 
@@ -127,6 +139,7 @@ function buildDiffLineMap(diffs) {
     const filePath = diff.new_path || diff.old_path;
     const lines = (diff.diff || '').split('\n');
     const fileMap = {};
+    const reverseFileMap = {};
 
     diffFileHashes[filePath] = sha1Sync(filePath);
 
@@ -156,13 +169,18 @@ function buildDiffLineMap(diffs) {
         newLine++;
       } else {
         fileMap[newLine] = oldLine;
+        reverseFileMap[oldLine] = newLine;
         lastOldLine = oldLine;
         oldLine++;
         newLine++;
       }
     }
 
-    diffLineMap[filePath] = fileMap;
+    // Store both maps: newLine→oldLine and oldLine→newLine
+    diffLineMap[filePath] = {
+      toOld: fileMap,
+      toNew: reverseFileMap
+    };
   }
 }
 
@@ -396,6 +414,15 @@ async function startReview() {
         </div>
       `;
 
+      // Add download button at the top of the result
+      const downloadBtn = document.createElement('button');
+      downloadBtn.className = 'ai-review-download-btn';
+      downloadBtn.innerHTML = '<span class="download-icon">💾</span> <span class="download-text">Скачать отчёт</span>';
+      downloadBtn.addEventListener('click', () => {
+        downloadReviewAsHTML(gitLabInfo.projectId, gitLabInfo.mergeRequestIid, reviewResponse.review, mrDetails);
+      });
+      content.querySelector('.ai-review-result').insertAdjacentElement('beforebegin', downloadBtn);
+
       content.addEventListener('click', (e) => {
         const btn = e.target.closest('[data-action]');
         if (!btn) return;
@@ -572,19 +599,41 @@ function renderIssueCard(issue) {
 }
 
 /**
- * Build GitLab URL for a specific file and line number
+ * Build GitLab URL for a specific file and line number.
+ *
+ * GitLab URL hash format: #fileHash_oldLine_newLine
+ *
+ * issue.line from LLM can be either old_line (line in the original file)
+ * or new_line (line in the modified file). We try to detect which one it is
+ * using the bidirectional line map.
  */
 function buildGitLabLineUrl(filePath, lineNumber) {
   if (!gitLabInfo || !gitLabInfo.projectPath || !gitLabInfo.mergeRequestIid) {
     return '#';
   }
 
-  const fileMap = diffLineMap[filePath] || {};
-  const oldLine = fileMap[lineNumber] || 0;
+  const fileMaps = diffLineMap[filePath] || { toOld: {}, toNew: {} };
   const fileHash = diffFileHashes[filePath] || sha1Sync(filePath);
 
-  let url = `${gitLabInfo.baseUrl}/${gitLabInfo.projectPath}/-/merge_requests/${gitLabInfo.mergeRequestIid}/diffs?drop_tab_selection=true&line=${lineNumber}`;
-  url += `#${fileHash}_${oldLine}_${lineNumber}`;
+  let oldLine, newLine;
+
+  // Check if lineNumber is an old_line (present in reverse map)
+  if (fileMaps.toNew[lineNumber] !== undefined) {
+    // lineNumber is old_line
+    oldLine = lineNumber;
+    newLine = fileMaps.toNew[oldLine];
+  } else if (fileMaps.toOld[lineNumber] !== undefined) {
+    // lineNumber is new_line
+    newLine = lineNumber;
+    oldLine = fileMaps.toOld[newLine];
+  } else {
+    // Fallback: assume lineNumber is new_line, use it as oldLine too
+    oldLine = lineNumber;
+    newLine = lineNumber;
+  }
+
+  let url = `${gitLabInfo.baseUrl}/${gitLabInfo.projectPath}/-/merge_requests/${gitLabInfo.mergeRequestIid}/diffs?drop_tab_selection=true&line=${newLine}`;
+  url += `#${fileHash}_${oldLine}_${newLine}`;
 
   return url;
 }
@@ -679,6 +728,212 @@ async function copyText(text) {
     document.execCommand('copy');
     document.body.removeChild(textarea);
   }
+}
+
+/**
+ * Download review as standalone HTML report
+ */
+function downloadReviewAsHTML(projectId, mergeRequestIid, reviewData, mrDetails) {
+  const projectName = mrDetails?.title
+    ? mrDetails.title
+        .replace(/\//g, '-')
+        .replace(/[^a-zA-Zа-яА-Я0-9\-_ ]/g, '')
+        .trim()
+    : `project_${projectId}`;
+  const safeName = `${projectName}_MR${mergeRequestIid}`.replace(/[^a-zA-Zа-яА-Я0-9\-_]/g, '_').replace(/_+/g, '_');
+
+  // Build issues HTML from review data
+  let issuesHtml = '';
+  const items = reviewData?.issues || reviewData?.suggestions || [];
+
+  if (Array.isArray(items) && items.length > 0) {
+    for (const item of items) {
+      const severity = item.severity || 'suggestion';
+      const title = item.title || item.type || 'Проблема';
+      const description = item.description || item.message || '';
+      const suggestion = item.suggestion || '';
+      const file = item.file || '';
+      const line = item.line || null;
+      const config = SEVERITY_CONFIG[severity] || SEVERITY_CONFIG.suggestion;
+
+      issuesHtml += `
+        <div class="issue-block" style="border: 1px solid #e5e7eb; border-radius: 8px; margin: 16px 0; overflow: hidden; background: #ffffff;">
+          <div class="issue-block-header" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: ${config.bg}; border-bottom: 1px solid #e5e7eb; gap: 12px; border-left: 4px solid ${config.color};">
+            <div class="issue-block-info" style="flex: 1; min-width: 0;">
+              <h4 style="margin: 0; font-size: 15px; font-weight: 600; color: #1f2937;">${escapeHtml(title)}</h4>
+              <div class="issue-block-meta" style="display: flex; align-items: center; gap: 12px; margin-top: 4px; font-size: 13px;">
+                <span style="font-weight: 600; font-size: 12px; color: ${config.color};">${config.label}</span>
+                ${file && line ? `<span style="color: #667eea;">📂 ${escapeHtml(file)}:${line}</span>` : ''}
+              </div>
+            </div>
+          </div>
+          <div class="issue-block-content" style="padding: 16px; color: #1f2937;">
+            <div class="issue-description" style="margin-bottom: 12px; line-height: 1.6;">${escapeHtml(description).replace(/\n/g, '<br>')}</div>
+            ${suggestion ? `<div class="issue-suggestion" style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 6px; padding: 10px 14px; font-size: 13px; color: #0c4a6e; margin-top: 8px;"><strong style="color: #0369a1;">💡 Исправление:</strong> ${escapeHtml(suggestion)}</div>` : ''}
+          </div>
+        </div>
+      `;
+    }
+  } else {
+    // Fallback: render reviewData as markdown-like
+    const text = typeof reviewData === 'string' ? reviewData : JSON.stringify(reviewData, null, 2);
+    issuesHtml = `<div style="white-space: pre-wrap; font-family: inherit; padding: 16px; background: #f9fafb; border-radius: 8px; color: #1f2937;">${escapeHtml(text)}</div>`;
+  }
+
+  // Summary
+  const summary = reviewData?.summary || reviewData?.comments || '';
+  const summaryHtml = summary
+    ? `<div class="review-summary" style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 16px 0;"><h4 style="margin: 0; font-size: 15px; font-weight: 600; color: #1f2937;">${escapeHtml(summary).replace(/\n/g, '<br>')}</h4></div>`
+    : '';
+
+  // Verdict
+  const verdictMap = {
+    approved: '✅ Approved',
+    changes_requested: '🔴 Changes Requested',
+    commented: '💬 Comments'
+  };
+  const verdict = reviewData?.verdict ? verdictMap[reviewData.verdict] || reviewData.verdict : '';
+  const verdictHtml = verdict
+    ? `<div class="review-verdict" style="background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 6px; padding: 10px 16px; margin: 12px 0; font-size: 14px; font-weight: 600; color: #065f46;">${verdict}</div>`
+    : '';
+
+  // MR context
+  const mrContext = mrDetails
+    ? `<div style="margin-bottom: 16px; padding: 12px; background: #f0f9ff; border-radius: 6px; font-size: 14px; color: #0c4a6e;">
+        <strong>MR Title:</strong> ${escapeHtml(mrDetails.title)}<br>
+        <strong>Branch:</strong> ${escapeHtml(mrDetails.source_branch)} → ${escapeHtml(mrDetails.target_branch)}<br>
+        <strong>Автор:</strong> ${escapeHtml(mrDetails.author?.name || 'N/A')}<br>
+        <strong>Дата:</strong> ${mrDetails.created_at ? new Date(mrDetails.created_at).toLocaleString('ru-RU') : 'N/A'}
+      </div>`
+    : '';
+
+  const now = new Date().toLocaleString('ru-RU');
+
+  // Build full HTML document
+  const htmlContent = `<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Review — ${safeName}</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 24px;
+      background: #ffffff;
+      color: #1f2937;
+      line-height: 1.6;
+    }
+    h1 {
+      font-size: 24px;
+      color: #1f2937;
+      border-bottom: 2px solid #e5e7eb;
+      padding-bottom: 8px;
+      margin-bottom: 16px;
+    }
+    .report-meta {
+      font-size: 13px;
+      color: #6b7280;
+      margin-bottom: 24px;
+    }
+    .review-summary h4 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+      color: #1f2937;
+    }
+    .review-verdict {
+      background: #ecfdf5;
+      border: 1px solid #a7f3d0;
+      border-radius: 6px;
+      padding: 10px 16px;
+      margin: 12px 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #065f46;
+    }
+    .issue-block {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      margin: 16px 0;
+      overflow: hidden;
+      background: #ffffff;
+    }
+    .issue-block-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid #e5e7eb;
+      gap: 12px;
+      border-left: 4px solid;
+    }
+    .issue-block-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .issue-block-meta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 4px;
+      font-size: 13px;
+    }
+    .issue-block-title {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+      color: #1f2937;
+    }
+    .issue-block-content {
+      padding: 16px;
+      color: #1f2937;
+    }
+    .issue-description {
+      margin-bottom: 12px;
+      line-height: 1.6;
+    }
+    .issue-suggestion {
+      background: #f0f9ff;
+      border: 1px solid #bae6fd;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: #0c4a6e;
+    }
+    .issue-suggestion strong {
+      color: #0369a1;
+    }
+    @media print {
+      body { padding: 12px; }
+      .issue-block { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <h1>🤖 AI Code Review Report</h1>
+  <div class="report-meta">
+    Проект: ${projectId} | MR: ${mergeRequestIid} | Сгенерировано: ${now}
+  </div>
+  ${mrContext}
+  ${summaryHtml}
+  ${verdictHtml}
+  ${issuesHtml}
+</body>
+</html>`;
+
+  // Create and download the file
+  const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${safeName}.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 /**

@@ -506,6 +506,37 @@
   margin: 0;
 }
 
+/* ===== Download Button ===== */
+
+.ai-review-download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+  margin-bottom: 16px;
+  width: 100%;
+  justify-content: center;
+}
+
+.ai-review-download-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
+}
+
+.ai-review-download-btn:active {
+  transform: translateY(0);
+}
+
 /* Fallback for non-JSON reviews */
 .ai-review-fallback {
   white-space: pre-wrap;
@@ -692,5 +723,15 @@
     background: #451a03;
     border-color: #92400e;
     color: #fde68a;
+  }
+
+  .ai-review-download-btn {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2);
+  }
+
+  .ai-review-download-btn:hover {
+    background: linear-gradient(135deg, #047857 0%, #03694b 100%);
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
   }
 }

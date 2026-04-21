@@ -82,9 +82,10 @@ function renderProfilesList() {
       <button class="btn btn-secondary btn-icon btn-sm btn-delete-profile" title="Удалить">×</button>
     `;
 
-    // Click to select
-    item.addEventListener('click', (e) => {
+    // Click to select — сначала сохраняем текущий, потом переключаем
+    item.addEventListener('click', async (e) => {
       if (e.target.classList.contains('btn-delete-profile')) return;
+      await saveCurrentProfile();
       selectProfile(profile.id);
     });
 
@@ -120,6 +121,21 @@ async function selectProfile(profileId) {
   document.getElementById('model').value = profile.model;
   document.getElementById('btn-delete-profile').style.display = '';
 
+  renderProfilesList();
+}
+
+// ===== Save current profile data (used before switching) =====
+async function saveCurrentProfile() {
+  if (!activeProfileId) return;
+  const profile = llmProfiles.find(p => p.id === activeProfileId);
+  if (!profile) return;
+
+  profile.name = document.getElementById('profile-name').value;
+  profile.apiUrl = document.getElementById('api-url').value.replace(/\/+$/, '');
+  profile.apiKey = document.getElementById('api-key').value;
+  profile.model = document.getElementById('model').value;
+
+  await saveData();
   renderProfilesList();
 }
 
@@ -170,7 +186,6 @@ async function loadFormIntoProfile() {
   profile.apiKey = document.getElementById('api-key').value;
   profile.model = document.getElementById('model').value;
 
-  await saveData();
   renderProfilesList();
 }
 
@@ -275,6 +290,6 @@ document.getElementById('max-diff-size').addEventListener('change', async () => 
 // ===== Live-save profile fields on change =====
 ['profile-name', 'api-url', 'api-key', 'model'].forEach(id => {
   document.getElementById(id).addEventListener('change', async () => {
-    await loadFormIntoProfile();
+    await saveCurrentProfile();
   });
 });
