@@ -48,7 +48,7 @@ function getCsrfToken() {
     return document.querySelector('meta[name="csrf-token"]')?.content;
 }
 
-async function createDraftCommentWithCookies(baseUrl, filePath, lineNumber, commentText) {
+async function createDraftCommentWithCookies(baseUrl, filePath, lineOld, lineNew, commentText) {
     const csrfToken = getCsrfToken();
 
     if (!csrfToken) {
@@ -61,17 +61,13 @@ async function createDraftCommentWithCookies(baseUrl, filePath, lineNumber, comm
     }
 
     const fileMaps = diffLineMap[filePath] || { toOld: {}, toNew: {} };
-    let newLine, oldLine;
 
-    // Determine if lineNumber refers to old_line or new_line
-    if (fileMaps.toNew[lineNumber] !== undefined) {
-        // lineNumber is old_line
-        oldLine = lineNumber;
-        newLine = fileMaps.toNew[oldLine];
-    } else {
-        // lineNumber is new_line
-        newLine = lineNumber;
-        oldLine = fileMaps.toOld[lineNumber];
+    // Resolve missing line number via diffLineMap
+    if (!lineOld && lineNew) {
+        lineOld = fileMaps.toOld[lineNew] || 0;
+    }
+    if (!lineNew && lineOld) {
+        lineNew = fileMaps.toNew[lineOld] || 0;
     }
 
     const position = {
@@ -80,12 +76,22 @@ async function createDraftCommentWithCookies(baseUrl, filePath, lineNumber, comm
         new_path: filePath,
         base_sha: diffRefs.base_sha,
         start_sha: diffRefs.start_sha,
-        head_sha: diffRefs.head_sha,
-        new_line: newLine
+        head_sha: diffRefs.head_sha
     };
 
-    if (oldLine && oldLine !== newLine) {
-        position.old_line = oldLine;
+    // GitLab API: set only ONE of old_line/new_line
+    // - Context line or added line → use new_line only
+    // - Deleted line → use old_line only
+    // Setting both creates a multi-line comment and shows twice in UI
+    if (lineNew && fileMaps.toOld[lineNew] !== undefined) {
+        // Context or added line — old_line exists in map
+        position.new_line = lineNew;
+    } else if (lineOld && fileMaps.toNew[lineOld] === null) {
+        // Deleted line — explicitly null in toNew map
+        position.old_line = lineOld;
+    } else {
+        // Fallback: use new_line
+        position.new_line = lineNew || 0;
     }
 
     const response = await fetch(
@@ -145,7 +151,6 @@ function buildDiffLineMap(diffs) {
 
     let oldLine = 0;
     let newLine = 0;
-    let lastOldLine = 0;
     let inHunk = false;
 
     for (const line of lines) {
@@ -153,7 +158,6 @@ function buildDiffLineMap(diffs) {
       if (hunkMatch) {
         oldLine = parseInt(hunkMatch[1], 10);
         newLine = parseInt(hunkMatch[2], 10);
-        lastOldLine = oldLine > 0 ? oldLine - 1 : 0;
         inHunk = true;
         continue;
       }
@@ -162,26 +166,80 @@ function buildDiffLineMap(diffs) {
       if (line.startsWith('\\')) continue;
 
       if (line.startsWith('-')) {
-        lastOldLine = oldLine;
+        reverseFileMap[oldLine] = null;
         oldLine++;
       } else if (line.startsWith('+')) {
-        fileMap[newLine] = lastOldLine;
+        fileMap[newLine] = oldLine;
         newLine++;
       } else {
         fileMap[newLine] = oldLine;
         reverseFileMap[oldLine] = newLine;
-        lastOldLine = oldLine;
         oldLine++;
         newLine++;
       }
     }
 
-    // Store both maps: newLine→oldLine and oldLine→newLine
     diffLineMap[filePath] = {
       toOld: fileMap,
       toNew: reverseFileMap
     };
   }
+}
+
+/**
+ * Format unified diff with explicit line numbers for each line.
+ * Output format:
+ *   [L:24 26]   context line (old=24, new=26)
+ *   [L:63   ] - deleted line (old=63)
+ *   [L:   63] + added line (new=63)
+ *
+ * For replacement (- then +):
+ *   [L:63   ] - old code
+ *   [L:   63] + new code
+ *
+ * The number the LLM should put in "line" field is the visible number
+ * from the marker (right side for +, left side for -, either for context).
+ */
+function formatDiffWithLineNumbers(rawDiff) {
+  const lines = (rawDiff || '').split('\n');
+  const result = [];
+  let oldLine = 0;
+  let newLine = 0;
+  let inHunk = false;
+
+  for (const line of lines) {
+    const hunkMatch = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (hunkMatch) {
+      oldLine = parseInt(hunkMatch[1], 10);
+      newLine = parseInt(hunkMatch[2], 10);
+      inHunk = true;
+      result.push(line);
+      continue;
+    }
+
+    if (!inHunk) {
+      result.push(line);
+      continue;
+    }
+    if (line.startsWith('\\')) {
+      result.push(line);
+      continue;
+    }
+
+    if (line.startsWith('-')) {
+      result.push(`[L:${oldLine}   ] ${line}`);
+      oldLine++;
+    } else if (line.startsWith('+')) {
+      result.push(`[L:   ${newLine}] ${line}`);
+      newLine++;
+    } else {
+      result.push(`[L:${oldLine} ${newLine}] ${line}`);
+      oldLine++;
+      newLine++;
+    }
+  }
+
+  return result.join('\n');
 }
 
 /**
@@ -207,10 +265,10 @@ async function fetchGitLabDiff(baseUrl, projectId, mergeRequestIid) {
 
     buildDiffLineMap(diffs);
 
-    // Combine all diffs into a single text
+    // Combine all diffs into a single text with explicit line numbers
     const diffText = diffs.map(diff => {
       const header = `--- ${diff.old_path}\n+++ ${diff.new_path}\n`;
-      return header + diff.diff;
+      return header + formatDiffWithLineNumbers(diff.diff);
     }).join('\n\n');
 
     return diffText;
@@ -422,22 +480,6 @@ async function startReview() {
         downloadReviewAsHTML(gitLabInfo.projectId, gitLabInfo.mergeRequestIid, reviewResponse.review, mrDetails);
       });
       content.querySelector('.ai-review-result').insertAdjacentElement('beforebegin', downloadBtn);
-
-      content.addEventListener('click', (e) => {
-        const btn = e.target.closest('[data-action]');
-        if (!btn) return;
-
-        const action = btn.dataset.action;
-        if (action === 'copy') {
-          const block = btn.closest('.issue-block');
-          copyIssueBlock(block?.id);
-        } else if (action === 'draft') {
-          const block = btn.closest('.issue-block');
-          createDraftComment(block?.id, btn.dataset.file, parseInt(btn.dataset.line, 10));
-        } else if (action === 'copy-text') {
-          copyText(btn.dataset.text);
-        }
-      });
     } else {
       throw new Error(reviewResponse.error || 'Unknown error occurred');
     }
@@ -516,7 +558,8 @@ function renderReviewJSON(review) {
         description: item.description || item.message || '',
         suggestion: item.suggestion || '',
         file: item.file || '',
-        line: item.line || null
+        line_new: item.line_new || null,
+        line_old: item.line_old || null
       };
       html += renderIssueCard(normalized);
     }
@@ -551,11 +594,14 @@ function renderIssueCard(issue) {
 
   // Build line number reference link (clickable)
   let lineRef = '';
-  if (issue.file && issue.line) {
-    const gitLabUrl = buildGitLabLineUrl(issue.file, issue.line);
+  if (issue.file && (issue.line_new || issue.line_old)) {
+    const gitLabUrl = buildGitLabLineUrl(issue.file, issue.line_old, issue.line_new);
+    const displayLine = issue.line_new && issue.line_old
+      ? `${issue.line_old} → ${issue.line_new}`
+      : issue.line_new || issue.line_old;
     lineRef = `
-      <a href="${gitLabUrl}" class="issue-line-ref" target="_blank" rel="noopener" title="Перейти к строке ${issue.line} в GitLab">
-        📂 ${escapeHtml(issue.file)}:${issue.line}
+      <a href="${gitLabUrl}" class="issue-line-ref" target="_blank" rel="noopener" title="Перейти к строке ${displayLine} в GitLab">
+        📂 ${escapeHtml(issue.file)}:${displayLine}
       </a>
     `;
   }
@@ -580,7 +626,7 @@ function renderIssueCard(issue) {
           </div>
         </div>
         <div class="issue-block-actions">
-          ${issue.file && issue.line ? `<button class="issue-block-draft" data-action="draft" data-file="${escapeHtml(issue.file)}" data-line="${issue.line}" title="Создать черновик комментария">
+          ${issue.file && (issue.line_new || issue.line_old) ? `<button class="issue-block-draft" data-action="draft" data-file="${escapeHtml(issue.file)}" data-line-old="${issue.line_old || ''}" data-line-new="${issue.line_new || ''}" title="Создать черновик комментария">
             <span class="draft-icon">💬</span>
             <span class="draft-text">Draft</span>
           </button>` : ''}
@@ -599,15 +645,10 @@ function renderIssueCard(issue) {
 }
 
 /**
- * Build GitLab URL for a specific file and line number.
- *
- * GitLab URL hash format: #fileHash_oldLine_newLine
- *
- * issue.line from LLM can be either old_line (line in the original file)
- * or new_line (line in the modified file). We try to detect which one it is
- * using the bidirectional line map.
+ * Build GitLab URL for a specific file and line numbers.
+ * If lineOld or lineNew is null/0, resolve via diffLineMap.
  */
-function buildGitLabLineUrl(filePath, lineNumber) {
+function buildGitLabLineUrl(filePath, lineOld, lineNew) {
   if (!gitLabInfo || !gitLabInfo.projectPath || !gitLabInfo.mergeRequestIid) {
     return '#';
   }
@@ -615,25 +656,16 @@ function buildGitLabLineUrl(filePath, lineNumber) {
   const fileMaps = diffLineMap[filePath] || { toOld: {}, toNew: {} };
   const fileHash = diffFileHashes[filePath] || sha1Sync(filePath);
 
-  let oldLine, newLine;
-
-  // Check if lineNumber is an old_line (present in reverse map)
-  if (fileMaps.toNew[lineNumber] !== undefined) {
-    // lineNumber is old_line
-    oldLine = lineNumber;
-    newLine = fileMaps.toNew[oldLine];
-  } else if (fileMaps.toOld[lineNumber] !== undefined) {
-    // lineNumber is new_line
-    newLine = lineNumber;
-    oldLine = fileMaps.toOld[newLine];
-  } else {
-    // Fallback: assume lineNumber is new_line, use it as oldLine too
-    oldLine = lineNumber;
-    newLine = lineNumber;
+  // Resolve missing line number via diffLineMap
+  if (!lineOld && lineNew) {
+    lineOld = fileMaps.toOld[lineNew] || 0;
+  }
+  if (!lineNew && lineOld) {
+    lineNew = fileMaps.toNew[lineOld] || 0;
   }
 
-  let url = `${gitLabInfo.baseUrl}/${gitLabInfo.projectPath}/-/merge_requests/${gitLabInfo.mergeRequestIid}/diffs?drop_tab_selection=true&line=${newLine}`;
-  url += `#${fileHash}_${oldLine}_${newLine}`;
+  let url = `${gitLabInfo.baseUrl}/${gitLabInfo.projectPath}/-/merge_requests/${gitLabInfo.mergeRequestIid}/diffs?drop_tab_selection=true&line=${lineNew}`;
+  url += `#${fileHash}_${lineOld}_${lineNew}`;
 
   return url;
 }
@@ -677,7 +709,7 @@ async function copyIssueBlock(elementId) {
   }
 }
 
-async function createDraftComment(elementId, filePath, lineNumber) {
+async function createDraftComment(elementId, filePath, lineOld, lineNew) {
   const element = document.getElementById(elementId);
   if (!element) return;
 
@@ -696,7 +728,7 @@ async function createDraftComment(elementId, filePath, lineNumber) {
   button.innerHTML = '<span class="draft-icon">⏳</span><span class="draft-text">...</span>';
 
   try {
-    await createDraftCommentWithCookies(gitLabInfo.baseUrl.replace(/^https?:\/\//, ''), filePath, lineNumber, commentText);
+    await createDraftCommentWithCookies(gitLabInfo.baseUrl.replace(/^https?:\/\//, ''), filePath, lineOld, lineNew, commentText);
     button.innerHTML = '<span class="draft-icon">✓</span><span class="draft-text">Создано</span>';
     button.classList.add('draft-created');
     setTimeout(() => {
@@ -753,7 +785,8 @@ function downloadReviewAsHTML(projectId, mergeRequestIid, reviewData, mrDetails)
       const description = item.description || item.message || '';
       const suggestion = item.suggestion || '';
       const file = item.file || '';
-      const line = item.line || null;
+      const lineNew = item.line_new || null;
+      const lineOld = item.line_old || null;
       const config = SEVERITY_CONFIG[severity] || SEVERITY_CONFIG.suggestion;
 
       issuesHtml += `
@@ -763,7 +796,7 @@ function downloadReviewAsHTML(projectId, mergeRequestIid, reviewData, mrDetails)
               <h4 style="margin: 0; font-size: 15px; font-weight: 600; color: #1f2937;">${escapeHtml(title)}</h4>
               <div class="issue-block-meta" style="display: flex; align-items: center; gap: 12px; margin-top: 4px; font-size: 13px;">
                 <span style="font-weight: 600; font-size: 12px; color: ${config.color};">${config.label}</span>
-                ${file && line ? `<span style="color: #667eea;">📂 ${escapeHtml(file)}:${line}</span>` : ''}
+                ${file && (lineNew || lineOld) ? `<span style="color: #667eea;">📂 ${escapeHtml(file)}:${lineOld && lineNew ? lineOld + ' → ' + lineNew : lineNew || lineOld}</span>` : ''}
               </div>
             </div>
           </div>
@@ -1100,6 +1133,25 @@ if (document.readyState === 'loading') {
 } else {
   init();
 }
+
+// Global event delegation for issue block actions
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+
+  const action = btn.dataset.action;
+  if (action === 'copy') {
+    const block = btn.closest('.issue-block');
+    copyIssueBlock(block?.id);
+  } else if (action === 'draft') {
+    const block = btn.closest('.issue-block');
+    const lineOld = btn.dataset.lineOld ? parseInt(btn.dataset.lineOld, 10) : null;
+    const lineNew = btn.dataset.lineNew ? parseInt(btn.dataset.lineNew, 10) : null;
+    createDraftComment(block?.id, btn.dataset.file, lineOld, lineNew);
+  } else if (action === 'copy-text') {
+    copyText(btn.dataset.text);
+  }
+});
 
 // Re-inject on navigation (SPA behavior)
 let lastUrl = window.location.href;
